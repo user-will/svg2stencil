@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG2Stencil</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: system-ui, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            display: flex;
+        }
+        .sidebar {
+            width: 280px;
+            background: #16213e;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        h1 { font-size: 1.4rem; color: #e94560; }
+        h2 { font-size: 0.8rem; color: #888; text-transform: uppercase; margin-bottom: 10px; }
+        .drop-zone {
+            border: 2px dashed #444;
+            border-radius: 8px;
+            padding: 30px 20px;
+            text-align: center;
+            cursor: pointer;
+        }
+        .drop-zone:hover, .drop-zone.drag-over { border-color: #e94560; background: rgba(233,69,96,0.1); }
+        .drop-zone.loaded { border-color: #4ade80; background: rgba(74,222,128,0.1); }
+        .drop-zone-text { font-size: 0.9rem; color: #888; }
+        .filename { font-size: 0.8rem; color: #4ade80; margin-top: 8px; word-break: break-all; }
+        .input-group { margin-bottom: 12px; }
+        .input-group label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 4px; }
+        .input-row { display: flex; gap: 8px; align-items: center; }
+        input[type="number"] {
+            flex: 1; padding: 8px; border: 1px solid #333; border-radius: 4px;
+            background: #1a1a2e; color: #eee; font-size: 0.9rem;
+        }
+        input:focus { outline: none; border-color: #e94560; }
+        .unit { font-size: 0.8rem; color: #666; min-width: 30px; }
+        button {
+            width: 100%; padding: 12px; border: none; border-radius: 6px;
+            font-size: 0.9rem; font-weight: 600; cursor: pointer;
+        }
+        .btn-primary { background: #e94560; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #d13652; }
+        .btn-primary:disabled { background: #444; cursor: not-allowed; }
+        .info { font-size: 0.85rem; color: #888; margin-top: auto; }
+        .info-value { color: #eee; }
+        .preview { flex: 1; position: relative; }
+        #canvas3d { width: 100%; height: 100%; display: block; }
+        .preview-hint { position: absolute; bottom: 10px; left: 10px; font-size: 0.75rem; color: #666; }
+        input[type="file"] { display: none; }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h1>SVG2Stencil</h1>
+        <div>
+            <h2>Paste Layer SVG</h2>
+            <div class="drop-zone" id="dropZone">
+                <div class="drop-zone-text">Drop file or click to browse</div>
+                <div class="filename" id="filename"></div>
+            </div>
+            <input type="file" id="fileInput" accept=".svg">
+        </div>
+        <div>
+            <h2>Stencil Size</h2>
+            <div class="input-group">
+                <label>Width</label>
+                <div class="input-row">
+                    <input type="number" id="stencilWidth" value="100" min="10" max="500">
+                    <span class="unit">mm</span>
+                </div>
+            </div>
+            <div class="input-group">
+                <label>Height</label>
+                <div class="input-row">
+                    <input type="number" id="stencilHeight" value="100" min="10" max="500">
+                    <span class="unit">mm</span>
+                </div>
+            </div>
+            <div class="input-group">
+                <label>Thickness</label>
+                <div class="input-row">
+                    <input type="number" id="stencilThickness" value="0.12" step="0.01" min="0.05" max="1">
+                    <span class="unit">mm</span>
+                </div>
+            </div>
+        </div>
+        <button class="btn-primary" id="downloadBtn" disabled>Download STL</button>
+        <div class="info"><span id="infoText">Load a paste layer SVG</span></div>
+    </div>
+    <div class="preview">
+        <canvas id="canvas3d"></canvas>
+        <div class="preview-hint">Drag to rotate, scroll to zoom</div>
+    </div>
+
+    <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+
+        let apertures = [], svgBounds = null;
+        let scene, camera, renderer, controls, stencilMesh;
+
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const filenameEl = document.getElementById('filename');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const infoText = document.getElementById('infoText');
+        const widthInput = document.getElementById('stencilWidth');
+        const heightInput = document.getElementById('stencilHeight');
+        const thicknessInput = document.getElementById('stencilThickness');
+
+        function initThreeJS() {
+            const canvas = document.getElementById('canvas3d');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a2e);
+            camera = new THREE.PerspectiveCamera(45, canvas.parentElement.clientWidth / canvas.parentElement.clientHeight, 0.1, 10000);
+            camera.position.set(0, 0, 200);
+            renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+            renderer.setSize(canvas.parentElement.clientWidth, canvas.parentElement.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const light = new THREE.DirectionalLight(0xffffff, 0.8);
+            light.position.set(50, 100, 50);
+            scene.add(light);
+            const grid = new THREE.GridHelper(200, 20, 0x444444, 0x222222);
+            grid.rotation.x = Math.PI / 2;
+            scene.add(grid);
+            animate();
+            window.addEventListener('resize', () => {
+                camera.aspect = canvas.parentElement.clientWidth / canvas.parentElement.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(canvas.parentElement.clientWidth, canvas.parentElement.clientHeight);
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function parseSVG(content) {
+            const doc = new DOMParser().parseFromString(content, 'image/svg+xml');
+            const results = [];
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+            for (const path of doc.querySelectorAll('path')) {
+                const d = path.getAttribute('d');
+                const style = path.getAttribute('style') || '';
+                if (!d || !style.includes('fill:') || style.includes('fill:none')) continue;
+
+                const points = parsePath(d);
+                if (points.length < 3) continue;
+
+                let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
+                for (const p of points) {
+                    pMinX = Math.min(pMinX, p.x); pMinY = Math.min(pMinY, p.y);
+                    pMaxX = Math.max(pMaxX, p.x); pMaxY = Math.max(pMaxY, p.y);
+                }
+                if (pMaxX - pMinX >= 0.1 && pMaxY - pMinY >= 0.1) {
+                    results.push(points);
+                    minX = Math.min(minX, pMinX); minY = Math.min(minY, pMinY);
+                    maxX = Math.max(maxX, pMaxX); maxY = Math.max(maxY, pMaxY);
+                }
+            }
+            svgBounds = { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+            return results;
+        }
+
+        function parsePath(d) {
+            const points = [];
+            const regex = /([MmLlHhVvCcZz])\s*([^MmLlHhVvCcZz]*)/g;
+            let x = 0, y = 0, startX = 0, startY = 0, match;
+
+            while ((match = regex.exec(d)) !== null) {
+                const cmd = match[1];
+                const args = match[2].trim() ? match[2].trim().split(/[\s,]+/).map(parseFloat).filter(n => !isNaN(n)) : [];
+                switch (cmd) {
+                    case 'M': for (let i = 0; i < args.length; i += 2) { x = args[i]; y = args[i+1]; if (i === 0) { startX = x; startY = y; } points.push({x, y}); } break;
+                    case 'm': for (let i = 0; i < args.length; i += 2) { x += args[i]; y += args[i+1]; if (i === 0) { startX = x; startY = y; } points.push({x, y}); } break;
+                    case 'L': for (let i = 0; i < args.length; i += 2) { x = args[i]; y = args[i+1]; points.push({x, y}); } break;
+                    case 'l': for (let i = 0; i < args.length; i += 2) { x += args[i]; y += args[i+1]; points.push({x, y}); } break;
+                    case 'H': x = args[0]; points.push({x, y}); break;
+                    case 'h': x += args[0]; points.push({x, y}); break;
+                    case 'V': y = args[0]; points.push({x, y}); break;
+                    case 'v': y += args[0]; points.push({x, y}); break;
+                    case 'C': for (let i = 0; i < args.length; i += 6) { x = args[i+4]; y = args[i+5]; points.push({x, y}); } break;
+                    case 'c': for (let i = 0; i < args.length; i += 6) { x += args[i+4]; y += args[i+5]; points.push({x, y}); } break;
+                }
+            }
+            // Remove duplicates
+            const clean = [];
+            for (const p of points) {
+                if (clean.length === 0 || Math.abs(p.x - clean[clean.length-1].x) > 0.005 || Math.abs(p.y - clean[clean.length-1].y) > 0.005) {
+                    clean.push(p);
+                }
+            }
+            return clean;
+        }
+
+        function signedArea(pts) {
+            let sum = 0;
+            for (let i = 0; i < pts.length; i++) {
+                const j = (i + 1) % pts.length;
+                sum += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+            }
+            return sum / 2;
+        }
+
+        function ensureCW(pts) {
+            return signedArea(pts) > 0 ? pts.slice().reverse() : pts;
+        }
+
+        function generateStencil() {
+            if (!apertures.length || !svgBounds) return;
+
+            const width = parseFloat(widthInput.value);
+            const height = parseFloat(heightInput.value);
+            const thickness = parseFloat(thicknessInput.value);
+
+            const centerX = svgBounds.minX + svgBounds.width / 2;
+            const centerY = svgBounds.minY + svgBounds.height / 2;
+
+            // Create stencil shape (rectangle)
+            const shape = new THREE.Shape();
+            shape.moveTo(-width/2, -height/2);
+            shape.lineTo(width/2, -height/2);
+            shape.lineTo(width/2, height/2);
+            shape.lineTo(-width/2, height/2);
+            shape.closePath();
+
+            // Add apertures as holes
+            for (const ap of apertures) {
+                // Transform and flip Y
+                let pts = ap.map(p => ({ x: p.x - centerX, y: -(p.y - centerY) }));
+                pts = ensureCW(pts);
+
+                if (pts.length >= 3) {
+                    const hole = new THREE.Path();
+                    hole.moveTo(pts[0].x, pts[0].y);
+                    for (let i = 1; i < pts.length; i++) {
+                        hole.lineTo(pts[i].x, pts[i].y);
+                    }
+                    hole.closePath();
+                    shape.holes.push(hole);
+                }
+            }
+
+            // Create geometry
+            const geometry = new THREE.ExtrudeGeometry(shape, {
+                depth: thickness,
+                bevelEnabled: false
+            });
+
+            if (stencilMesh) {
+                scene.remove(stencilMesh);
+                stencilMesh.geometry.dispose();
+                stencilMesh.material.dispose();
+            }
+
+            stencilMesh = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial({ color: 0x4a90d9, side: THREE.DoubleSide }));
+            stencilMesh.position.z = -thickness / 2;
+            scene.add(stencilMesh);
+
+            camera.position.set(0, 0, Math.max(width, height) * 1.5);
+            controls.target.set(0, 0, 0);
+            controls.update();
+
+            downloadBtn.disabled = false;
+        }
+
+        function downloadSTL() {
+            if (!stencilMesh) return;
+            const exporter = new STLExporter();
+            const buffer = exporter.parse(stencilMesh, { binary: true });
+            const blob = new Blob([buffer], { type: 'application/octet-stream' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'stencil.stl';
+            a.click();
+        }
+
+        function loadFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                apertures = parseSVG(e.target.result);
+                filenameEl.textContent = file.name;
+                dropZone.classList.add('loaded');
+                infoText.innerHTML = `Apertures: <span class="info-value">${apertures.length}</span> | Size: <span class="info-value">${svgBounds.width.toFixed(1)} x ${svgBounds.height.toFixed(1)} mm</span>`;
+                widthInput.value = Math.ceil(svgBounds.width + 20);
+                heightInput.value = Math.ceil(svgBounds.height + 20);
+                generateStencil();
+            };
+            reader.readAsText(file);
+        }
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+        dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); if (e.dataTransfer.files[0]?.name.endsWith('.svg')) loadFile(e.dataTransfer.files[0]); });
+        fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+        downloadBtn.addEventListener('click', downloadSTL);
+        widthInput.addEventListener('change', generateStencil);
+        heightInput.addEventListener('change', generateStencil);
+        thicknessInput.addEventListener('change', generateStencil);
+
+        initThreeJS();
+    </script>
+</body>
+</html>
