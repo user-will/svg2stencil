@@ -2,6 +2,8 @@
 
 3D print a solder paste stencil for any circuit board. Export the paste layer from KiCad as SVG and get a custom STL file you can 3D print.
 
+![Example](example.png)
+
 ## Usage
 
 1. Open `index.html` in a browser
