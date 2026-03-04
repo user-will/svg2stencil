@@ -288,6 +288,12 @@
             if (!stencilMesh) return;
             const exporter = new STLExporter();
             const buffer = exporter.parse(stencilMesh, { binary: true });
+
+            const comment = "SVG2Stencil";
+            for (let i = 0; i < comment.length && i < 80; i++) {
+                buffer.setUint8(i, comment.charCodeAt(i)); 
+            }
+
             const blob = new Blob([buffer], { type: 'application/octet-stream' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
