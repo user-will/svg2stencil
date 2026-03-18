@@ -19,14 +19,16 @@
             padding: 20px;
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 16px;
+            overflow-y: auto;
+            max-height: 100vh;
         }
         h1 { font-size: 1.4rem; color: #e94560; }
         h2 { font-size: 0.8rem; color: #888; text-transform: uppercase; margin-bottom: 10px; }
         .drop-zone {
             border: 2px dashed #444;
             border-radius: 8px;
-            padding: 30px 20px;
+            padding: 20px 16px;
             text-align: center;
             cursor: pointer;
         }
@@ -34,13 +36,16 @@
         .drop-zone.loaded { border-color: #4ade80; background: rgba(74,222,128,0.1); }
         .drop-zone-text { font-size: 0.9rem; color: #888; }
         .filename { font-size: 0.8rem; color: #4ade80; margin-top: 8px; word-break: break-all; }
-        .input-group { margin-bottom: 12px; }
+        .input-group { margin-bottom: 10px; }
         .input-group label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 4px; }
         .input-row { display: flex; gap: 8px; align-items: center; }
+        .toggle-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .toggle-row label { font-size: 0.8rem; color: #888; }
         input[type="number"] {
             flex: 1; padding: 8px; border: 1px solid #333; border-radius: 4px;
             background: #1a1a2e; color: #eee; font-size: 0.9rem;
         }
+        input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #e94560; }
         input:focus { outline: none; border-color: #e94560; }
         .unit { font-size: 0.8rem; color: #666; min-width: 30px; }
         button {
@@ -50,17 +55,23 @@
         .btn-primary { background: #e94560; color: white; }
         .btn-primary:hover:not(:disabled) { background: #d13652; }
         .btn-primary:disabled { background: #444; cursor: not-allowed; }
-        .info { font-size: 0.85rem; color: #888; margin-top: auto; }
+        .info { font-size: 0.85rem; color: #888; }
         .info-value { color: #eee; }
         .preview { flex: 1; position: relative; }
         #canvas3d { width: 100%; height: 100%; display: block; }
         .preview-hint { position: absolute; bottom: 10px; left: 10px; font-size: 0.75rem; color: #666; }
         input[type="file"] { display: none; }
+        .hint { font-size: 0.75rem; color: #555; margin-top: 4px; }
+        #lipSection { display: none; }
+        #lipControls { transition: opacity 0.2s; }
+        #stencilSizeSection { transition: opacity 0.2s; }
+        .size-note { font-size: 0.75rem; color: #888; margin-bottom: 8px; display: none; }
     </style>
 </head>
 <body>
     <div class="sidebar">
         <h1>SVG2Stencil</h1>
+
         <div>
             <h2>Paste Layer File</h2>
             <div class="drop-zone" id="dropZone">
@@ -69,8 +80,20 @@
             </div>
             <input type="file" id="fileInput" accept=".svg,.gbr,.ger,.gtp,.gbp,.gm1,.gtl,.gbl">
         </div>
+
         <div>
+            <h2>Edge Cuts Layer <span style="color:#555;font-size:0.7rem;text-transform:none">(optional)</span></h2>
+            <div class="drop-zone" id="edgeCutsDropZone">
+                <div class="drop-zone-text">Drop Gerber or SVG edge cuts</div>
+                <div class="filename" id="edgeCutsFilename"></div>
+            </div>
+            <input type="file" id="edgeCutsFileInput" accept=".svg,.gbr,.ger,.gm1,.gm2,.gm3,.gko">
+            <div class="hint">e.g. Edge_Cuts.gbr, .gm1, .gko</div>
+        </div>
+
+        <div id="stencilSizeSection">
             <h2>Stencil Size</h2>
+            <div class="size-note" id="sizeNote">Bounded by edge cuts when lip is enabled</div>
             <div class="input-group">
                 <label>Width</label>
                 <div class="input-row">
@@ -93,6 +116,38 @@
                 </div>
             </div>
         </div>
+
+        <div id="lipSection">
+            <h2>Board Lip</h2>
+            <div class="toggle-row">
+                <label for="lipEnabled">Enable lip</label>
+                <input type="checkbox" id="lipEnabled" checked>
+            </div>
+            <div id="lipControls">
+                <div class="input-group">
+                    <label>Lip Height</label>
+                    <div class="input-row">
+                        <input type="number" id="lipHeight" value="1.2" step="0.1" min="0.5" max="10">
+                        <span class="unit">mm</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Wall Thickness</label>
+                    <div class="input-row">
+                        <input type="number" id="lipWall" value="1.2" step="0.1" min="0.3" max="5">
+                        <span class="unit">mm</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Fit Clearance</label>
+                    <div class="input-row">
+                        <input type="number" id="lipClearance" value="0.15" step="0.05" min="0" max="2">
+                        <span class="unit">mm</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <button class="btn-primary" id="downloadBtn" disabled>Download STL</button>
         <div class="info"><span id="infoText">Load a paste layer SVG or Gerber</span></div>
     </div>
@@ -109,18 +164,29 @@
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+        import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
         let apertures = [], svgBounds = null;
-        let scene, camera, renderer, controls, stencilMesh;
+        let edgeCutsContour = null;
+        let scene, camera, renderer, controls, stencilMesh, lipMesh;
 
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
         const filenameEl = document.getElementById('filename');
+        const edgeCutsDropZone = document.getElementById('edgeCutsDropZone');
+        const edgeCutsFileInput = document.getElementById('edgeCutsFileInput');
+        const edgeCutsFilenameEl = document.getElementById('edgeCutsFilename');
         const downloadBtn = document.getElementById('downloadBtn');
         const infoText = document.getElementById('infoText');
         const widthInput = document.getElementById('stencilWidth');
         const heightInput = document.getElementById('stencilHeight');
         const thicknessInput = document.getElementById('stencilThickness');
+        const lipSection = document.getElementById('lipSection');
+        const lipEnabledInput = document.getElementById('lipEnabled');
+        const lipHeightInput = document.getElementById('lipHeight');
+        const lipWallInput = document.getElementById('lipWall');
+        const lipClearanceInput = document.getElementById('lipClearance');
+        const lipControls = document.getElementById('lipControls');
 
         function initThreeJS() {
             const canvas = document.getElementById('canvas3d');
@@ -180,6 +246,21 @@
             }
             svgBounds = { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
             return results;
+        }
+
+        function parseSVGEdgeCuts(content) {
+            const doc = new DOMParser().parseFromString(content, 'image/svg+xml');
+            const contours = [];
+            for (const path of doc.querySelectorAll('path')) {
+                const d = path.getAttribute('d');
+                if (!d) continue;
+                const style = path.getAttribute('style') || '';
+                // Accept stroke paths (fill:none) — typical for edge cuts
+                if (style.includes('fill:') && !style.includes('fill:none')) continue;
+                const pts = parsePath(d);
+                if (pts.length >= 3) contours.push(pts);
+            }
+            return contours;
         }
 
         function parsePath(d) {
@@ -408,6 +489,178 @@
             return results;
         }
 
+        // Parse edge cuts from a Gerber file (stroke-based, not region-based).
+        // Returns an array of closed contours [{x,y}[]].
+        function parseEdgeCuts(content) {
+            let xDec = 6, yDec = 6;
+            const fmtMatch = content.match(/%FSL[AI]X\d(\d)Y\d(\d)\*%/);
+            if (fmtMatch) { xDec = parseInt(fmtMatch[1]); yDec = parseInt(fmtMatch[2]); }
+            const toMM = content.includes('%MOIN*%') ? 25.4 : 1;
+
+            function toVal(s, dec) { return parseInt(s) / Math.pow(10, dec) * toMM; }
+
+            const segments = [];
+            let curX = 0, curY = 0;
+            let interpMode = 1; // 1=linear, 2=CW (G02), 3=CCW (G03)
+
+            const stripped = content.replace(/%[^%]*%/g, '');
+            const commands = stripped.split('*').map(s => s.trim()).filter(Boolean);
+
+            for (const cmd of commands) {
+                if (/^G0*4/.test(cmd)) continue;
+                if (/^M0*2$/.test(cmd)) break;
+                if (/^G0*36$/.test(cmd) || /^G0*37$/.test(cmd)) continue; // skip region mode
+                if (/^G0*1$/.test(cmd)) { interpMode = 1; continue; }
+                if (/^G0*2$/.test(cmd)) { interpMode = 2; continue; }
+                if (/^G0*3$/.test(cmd)) { interpMode = 3; continue; }
+
+                const coordMatch = cmd.match(/^(?:G0*([123]))?(?:X(-?\d+))?(?:Y(-?\d+))?(?:I(-?\d+))?(?:J(-?\d+))?D0*(\d+)$/);
+                if (!coordMatch) continue;
+
+                if (coordMatch[1]) interpMode = parseInt(coordMatch[1]);
+                const nx = coordMatch[2] !== undefined ? toVal(coordMatch[2], xDec) : curX;
+                const ny = coordMatch[3] !== undefined ? -toVal(coordMatch[3], yDec) : curY; // Y inverted same as paste layer
+                const dCode = parseInt(coordMatch[6]);
+
+                if (dCode >= 10) continue; // aperture select
+
+                if (dCode === 2) {
+                    // Pen up — move to new position
+                    curX = nx; curY = ny;
+                } else if (dCode === 1) {
+                    // Pen down — draw from current to new position
+                    if (Math.abs(nx - curX) > 0.001 || Math.abs(ny - curY) > 0.001) {
+                        if (interpMode === 1) {
+                            segments.push({ x1: curX, y1: curY, x2: nx, y2: ny });
+                        } else {
+                            // Arc: I/J are Gerber-space offset from current point to center.
+                            // After Y-inversion: arcCY = curY - jVal (J is in raw Gerber Y).
+                            const iVal = coordMatch[4] !== undefined ? toVal(coordMatch[4], xDec) : 0;
+                            const jVal = coordMatch[5] !== undefined ? toVal(coordMatch[5], yDec) : 0;
+                            const arcCX = curX + iVal;
+                            const arcCY = curY - jVal;
+                            const r = Math.sqrt((curX - arcCX) ** 2 + (curY - arcCY) ** 2);
+                            if (r > 0.001) {
+                                let startAngle = Math.atan2(curY - arcCY, curX - arcCX);
+                                let endAngle = Math.atan2(ny - arcCY, nx - arcCX);
+                                // G02=CW in Gerber → CCW in Y-inverted space → increasing angle
+                                if (interpMode === 2) { if (endAngle < startAngle) endAngle += 2 * Math.PI; }
+                                // G03=CCW in Gerber → CW in Y-inverted space → decreasing angle
+                                else { if (endAngle > startAngle) endAngle -= 2 * Math.PI; }
+                                const arcSegs = Math.max(4, Math.ceil(Math.abs(endAngle - startAngle) * r * 4));
+                                let px = curX, py = curY;
+                                for (let i = 1; i <= arcSegs; i++) {
+                                    const angle = startAngle + (endAngle - startAngle) * i / arcSegs;
+                                    const ax = arcCX + r * Math.cos(angle);
+                                    const ay = arcCY + r * Math.sin(angle);
+                                    segments.push({ x1: px, y1: py, x2: ax, y2: ay });
+                                    px = ax; py = ay;
+                                }
+                            }
+                        }
+                    }
+                    curX = nx; curY = ny;
+                }
+            }
+
+            return chainSegmentsToContours(segments);
+        }
+
+        // Connect a flat list of line segments into closed contours.
+        function chainSegmentsToContours(segments) {
+            if (!segments.length) return [];
+            const EPS = 0.05; // mm tolerance for endpoint matching
+            const used = new Set();
+            const contours = [];
+
+            const endMap = new Map();
+            function addEnd(x, y, idx, end) {
+                const k = `${Math.round(x / EPS)}_${Math.round(y / EPS)}`;
+                if (!endMap.has(k)) endMap.set(k, []);
+                endMap.get(k).push({ idx, end });
+            }
+            function getAt(x, y) {
+                const k = `${Math.round(x / EPS)}_${Math.round(y / EPS)}`;
+                return (endMap.get(k) || []).filter(e => !used.has(e.idx));
+            }
+
+            for (let i = 0; i < segments.length; i++) {
+                addEnd(segments[i].x1, segments[i].y1, i, 'start');
+                addEnd(segments[i].x2, segments[i].y2, i, 'end');
+            }
+
+            for (let si = 0; si < segments.length; si++) {
+                if (used.has(si)) continue;
+                used.add(si);
+
+                const startX = segments[si].x1, startY = segments[si].y1;
+                const pts = [{ x: startX, y: startY }];
+                let cx = segments[si].x2, cy = segments[si].y2;
+                pts.push({ x: cx, y: cy });
+
+                let closed = false;
+                for (let iter = 0; iter < segments.length; iter++) {
+                    if (Math.abs(cx - startX) < EPS && Math.abs(cy - startY) < EPS) { closed = true; break; }
+                    const next = getAt(cx, cy);
+                    if (!next.length) break;
+                    const { idx, end } = next[0];
+                    used.add(idx);
+                    const seg = segments[idx];
+                    if (end === 'start') { cx = seg.x2; cy = seg.y2; }
+                    else { cx = seg.x1; cy = seg.y1; }
+                    pts.push({ x: cx, y: cy });
+                }
+
+                // The closing iteration pushes a near-duplicate of startPt; remove it so
+                // offsetPolygon sees a clean polygon with no zero-length edges at vertex 0.
+                if (closed) {
+                    const last = pts[pts.length - 1];
+                    if (Math.abs(last.x - startX) < EPS && Math.abs(last.y - startY) < EPS) pts.pop();
+                }
+                if (closed && pts.length >= 3) contours.push(pts);
+            }
+
+            return contours;
+        }
+
+        // Offset a polygon outward by distance d using the vertex-normal bisector method.
+        // Input polygon should have at least 3 points; winding is normalized to CCW internally.
+        function offsetPolygon(points, d) {
+            if (Math.abs(d) < 0.0001) return points.map(p => ({ ...p }));
+            let pts = points;
+            // Normalize to CCW so right-normals point outward
+            if (signedArea(pts) < 0) pts = pts.slice().reverse();
+            const n = pts.length;
+            const result = [];
+            for (let i = 0; i < n; i++) {
+                const prev = pts[(i - 1 + n) % n];
+                const curr = pts[i];
+                const next = pts[(i + 1) % n];
+                const e1x = curr.x - prev.x, e1y = curr.y - prev.y;
+                const l1 = Math.sqrt(e1x * e1x + e1y * e1y);
+                const e2x = next.x - curr.x, e2y = next.y - curr.y;
+                const l2 = Math.sqrt(e2x * e2x + e2y * e2y);
+                if (l1 < 0.0001 || l2 < 0.0001) { result.push({ x: curr.x, y: curr.y }); continue; }
+                // Right normals of each edge (outward for CCW polygon)
+                const n1x = e1y / l1, n1y = -e1x / l1;
+                const n2x = e2y / l2, n2y = -e2x / l2;
+                // Bisector of the two outward normals
+                const bx = n1x + n2x, by = n1y + n2y;
+                const bl = Math.sqrt(bx * bx + by * by);
+                if (bl < 0.0001) {
+                    // Antiparallel edges — straight line, use edge normal directly
+                    result.push({ x: curr.x + n1x * d, y: curr.y + n1y * d });
+                    continue;
+                }
+                const bux = bx / bl, buy = by / bl;
+                const dot = n1x * bux + n1y * buy; // always > 0 for well-formed polygon
+                // Cap at 10x to avoid extreme spike at very sharp corners
+                const scale = dot > 0.1 ? d / dot : d * 10;
+                result.push({ x: curr.x + bux * scale, y: curr.y + buy * scale });
+            }
+            return result;
+        }
+
         function signedArea(pts) {
             let sum = 0;
             for (let i = 0; i < pts.length; i++) {
@@ -431,17 +684,43 @@
             const centerX = svgBounds.minX + svgBounds.width / 2;
             const centerY = svgBounds.minY + svgBounds.height / 2;
 
-            // Create stencil shape (rectangle)
+            // Clean up old meshes
+            if (stencilMesh) { scene.remove(stencilMesh); stencilMesh.geometry.dispose(); stencilMesh.material.dispose(); stencilMesh = null; }
+            if (lipMesh) { scene.remove(lipMesh); lipMesh.geometry.dispose(); lipMesh.material.dispose(); lipMesh = null; }
+
+            const useLip = edgeCutsContour && lipEnabledInput.checked;
+
+            // Pre-compute offset edges when lip is active (reused for both stencil shape and lip mesh)
+            let contourWorld = null, innerEdge = null, outerEdge = null;
+            if (edgeCutsContour) {
+                contourWorld = edgeCutsContour.map(p => ({ x: p.x - centerX, y: -(p.y - centerY) }));
+            }
+            if (useLip) {
+                const lipClearance = parseFloat(lipClearanceInput.value);
+                const lipWall = parseFloat(lipWallInput.value);
+                innerEdge = offsetPolygon(contourWorld, lipClearance);
+                outerEdge = offsetPolygon(contourWorld, lipClearance + lipWall);
+            }
+
+            // Create stencil shape: board outline when lip is on, rectangle otherwise
             const shape = new THREE.Shape();
-            shape.moveTo(-width/2, -height/2);
-            shape.lineTo(width/2, -height/2);
-            shape.lineTo(width/2, height/2);
-            shape.lineTo(-width/2, height/2);
-            shape.closePath();
+            if (useLip && outerEdge) {
+                // Shape follows the outer edge of the lip — stencil doesn't extend beyond the board
+                const outerCCW = signedArea(outerEdge) < 0 ? outerEdge.slice().reverse() : outerEdge;
+                shape.moveTo(outerCCW[0].x, outerCCW[0].y);
+                for (let i = 1; i < outerCCW.length; i++) shape.lineTo(outerCCW[i].x, outerCCW[i].y);
+                shape.closePath();
+            } else {
+                shape.moveTo(-width/2, -height/2);
+                shape.lineTo(width/2, -height/2);
+                shape.lineTo(width/2, height/2);
+                shape.lineTo(-width/2, height/2);
+                shape.closePath();
+            }
 
             // Add apertures as holes
             for (const ap of apertures) {
-                // Transform and flip Y
+                // Transform: center and flip Y (second flip corrects the Y-inversion from parsing)
                 let pts = ap.map(p => ({ x: p.x - centerX, y: -(p.y - centerY) }));
                 pts = ensureCW(pts);
 
@@ -456,21 +735,44 @@
                 }
             }
 
-            // Create geometry
+            // Create geometry — stencil spans Z: [-thickness/2, +thickness/2] after position offset
             const geometry = new THREE.ExtrudeGeometry(shape, {
                 depth: thickness,
                 bevelEnabled: false
             });
 
-            if (stencilMesh) {
-                scene.remove(stencilMesh);
-                stencilMesh.geometry.dispose();
-                stencilMesh.material.dispose();
-            }
-
             stencilMesh = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial({ color: 0x4a90d9, side: THREE.DoubleSide }));
             stencilMesh.position.z = -thickness / 2;
             scene.add(stencilMesh);
+
+            // Generate lip mesh (annular wall hanging below stencil)
+            if (useLip && innerEdge && outerEdge) {
+                const lipHeight = parseFloat(lipHeightInput.value);
+
+                // Build annular shape: outer boundary with inner boundary as hole
+                const lipShape = new THREE.Shape();
+                const outerCCW = signedArea(outerEdge) < 0 ? outerEdge.slice().reverse() : outerEdge;
+                lipShape.moveTo(outerCCW[0].x, outerCCW[0].y);
+                for (let i = 1; i < outerCCW.length; i++) lipShape.lineTo(outerCCW[i].x, outerCCW[i].y);
+                lipShape.closePath();
+
+                const lipHole = new THREE.Path();
+                const innerCW = ensureCW(innerEdge);
+                lipHole.moveTo(innerCW[0].x, innerCW[0].y);
+                for (let i = 1; i < innerCW.length; i++) lipHole.lineTo(innerCW[i].x, innerCW[i].y);
+                lipHole.closePath();
+                lipShape.holes.push(lipHole);
+
+                const lipGeometry = new THREE.ExtrudeGeometry(lipShape, {
+                    depth: lipHeight,
+                    bevelEnabled: false
+                });
+
+                // Lip spans Z: [-(thickness/2 + lipHeight), -thickness/2], flush with stencil bottom
+                lipMesh = new THREE.Mesh(lipGeometry, new THREE.MeshPhongMaterial({ color: 0xe94560, side: THREE.DoubleSide }));
+                lipMesh.position.z = -(thickness / 2 + lipHeight);
+                scene.add(lipMesh);
+            }
 
             camera.position.set(0, 0, Math.max(width, height) * 1.5);
             controls.target.set(0, 0, 0);
@@ -482,7 +784,22 @@
         function downloadSTL() {
             if (!stencilMesh) return;
             const exporter = new STLExporter();
-            const buffer = exporter.parse(stencilMesh, { binary: true });
+
+            let buffer;
+            if (lipMesh) {
+                // Merge stencil and lip into a single geometry for a clean STL
+                const stencilGeo = stencilMesh.geometry.clone().applyMatrix4(stencilMesh.matrixWorld);
+                const lipGeo = lipMesh.geometry.clone().applyMatrix4(lipMesh.matrixWorld);
+                const merged = mergeGeometries([stencilGeo, lipGeo]);
+                const tempMesh = new THREE.Mesh(merged);
+                buffer = exporter.parse(tempMesh, { binary: true });
+                merged.dispose();
+                stencilGeo.dispose();
+                lipGeo.dispose();
+            } else {
+                buffer = exporter.parse(stencilMesh, { binary: true });
+            }
+
             const blob = new Blob([buffer], { type: 'application/octet-stream' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
@@ -491,7 +808,7 @@
         }
 
         function isGerber(name) {
-            return /\.(gbr|ger|gtp|gbp|gm\d+|gtl|gbl)$/i.test(name);
+            return /\.(gbr|ger|gtp|gbp|gm\d+|gtl|gbl|gko)$/i.test(name);
         }
 
         function loadFile(file) {
@@ -508,15 +825,72 @@
             reader.readAsText(file);
         }
 
+        function loadEdgeCuts(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const content = e.target.result;
+                const contours = isGerber(file.name) ? parseEdgeCuts(content) : parseSVGEdgeCuts(content);
+
+                if (!contours.length) {
+                    edgeCutsFilenameEl.textContent = 'No closed contours found';
+                    edgeCutsFilenameEl.style.color = '#e94560';
+                    return;
+                }
+
+                // Select the largest closed contour as the board outline
+                // (inner cutouts / holes have smaller area than the board boundary)
+                edgeCutsContour = contours.reduce((best, c) =>
+                    Math.abs(signedArea(c)) > Math.abs(signedArea(best)) ? c : best
+                );
+
+                edgeCutsFilenameEl.textContent = file.name;
+                edgeCutsFilenameEl.style.color = '';
+                edgeCutsDropZone.classList.add('loaded');
+                lipSection.style.display = 'block';
+                updateLipUI();
+
+                if (apertures.length) generateStencil();
+            };
+            reader.readAsText(file);
+        }
+
+        // Wire up paste layer drop zone
         dropZone.addEventListener('click', () => fileInput.click());
         dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-        dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); const f = e.dataTransfer.files[0]; if (f && (f.name.endsWith('.svg') || isGerber(f.name))) loadFile(f); });
+        dropZone.addEventListener('drop', e => {
+            e.preventDefault(); dropZone.classList.remove('drag-over');
+            const f = e.dataTransfer.files[0];
+            if (f && (f.name.endsWith('.svg') || isGerber(f.name))) loadFile(f);
+        });
         fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+        // Wire up edge cuts drop zone
+        edgeCutsDropZone.addEventListener('click', () => edgeCutsFileInput.click());
+        edgeCutsDropZone.addEventListener('dragover', e => { e.preventDefault(); edgeCutsDropZone.classList.add('drag-over'); });
+        edgeCutsDropZone.addEventListener('dragleave', () => edgeCutsDropZone.classList.remove('drag-over'));
+        edgeCutsDropZone.addEventListener('drop', e => {
+            e.preventDefault(); edgeCutsDropZone.classList.remove('drag-over');
+            const f = e.dataTransfer.files[0];
+            if (f) loadEdgeCuts(f);
+        });
+        edgeCutsFileInput.addEventListener('change', e => { if (e.target.files[0]) loadEdgeCuts(e.target.files[0]); });
+
+        // Regenerate on any parameter change
         downloadBtn.addEventListener('click', downloadSTL);
         widthInput.addEventListener('change', generateStencil);
         heightInput.addEventListener('change', generateStencil);
         thicknessInput.addEventListener('change', generateStencil);
+        function updateLipUI() {
+            const on = lipEnabledInput.checked;
+            lipControls.style.opacity = on ? '1' : '0.4';
+            document.getElementById('stencilSizeSection').style.opacity = on ? '0.4' : '1';
+            document.getElementById('sizeNote').style.display = on ? 'block' : 'none';
+        }
+        lipEnabledInput.addEventListener('change', () => { updateLipUI(); generateStencil(); });
+        lipHeightInput.addEventListener('change', generateStencil);
+        lipWallInput.addEventListener('change', generateStencil);
+        lipClearanceInput.addEventListener('change', generateStencil);
 
         initThreeJS();
     </script>
