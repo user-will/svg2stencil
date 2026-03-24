@@ -4,7 +4,7 @@
 
 Optionally add a **board lip** — a wall around the edge of the PCB that lets the stencil seat itself automatically without manual alignment.
 
-![Example](example.png)
+![Example](printastencil.png)
 
 ## Usage
 
