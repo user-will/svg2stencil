@@ -346,6 +346,7 @@
                 for (const prim of prims) {
                     const p = prim.split(',').map(parseFloat);
                     if (isNaN(p[0])) continue; // comment primitive (0 with text)
+                    if (p[1] === 0) continue; // clear primitives are cutouts, not aperture extent
                     if (p[0] === 1) { // circle: 1,exp,diam,x,y
                         const r = p[2]/2, cx = p[3]||0, cy = p[4]||0;
                         if (isNaN(r)) continue;
@@ -389,6 +390,18 @@
                 return pts;
             }
 
+            function polygonPoints(cx, cy, diameter, vertices, rotation = 0) {
+                const pts = [];
+                const n = Math.max(3, Math.round(vertices || 32));
+                const r = diameter / 2;
+                const rot = rotation * Math.PI / 180;
+                for (let i = 0; i < n; i++) {
+                    const a = rot + (i / n) * Math.PI * 2;
+                    pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+                }
+                return pts;
+            }
+
             function obroundPoints(cx, cy, w, h) {
                 const pts = [], n = 16;
                 if (w >= h) {
@@ -421,8 +434,11 @@
                 const { type, params } = ap;
 
                 // Standard single-character types
-                if (type === 'C' || type === 'P') {
+                if (type === 'C') {
                     return (params[0] > 0) ? circlePoints(cx, cy, params[0] / 2) : [];
+                }
+                if (type === 'P') {
+                    return (params[0] > 0) ? polygonPoints(cx, cy, params[0], params[1], params[2] || 0) : [];
                 }
                 if (type === 'R' || type === 'Rect') {
                     const hw = params[0]/2, hh = (params[1] ?? params[0])/2;
@@ -465,6 +481,7 @@
             const results = [];
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             let curAp = null, curX = 0, curY = 0;
+            let modalD = null;
             let inRegion = false, regionPts = [];
 
             // Remove %...% extended command blocks, then split by * into individual commands
@@ -486,21 +503,25 @@
                 if (/^M0*2$/.test(cmd)) break;           // end of file
 
                 // Standalone aperture select: D10+
-                const dSelect = cmd.match(/^D(\d+)$/);
+                const dSelect = cmd.match(/^(?:G54)?D(\d+)$/);
                 if (dSelect) {
                     const n = parseInt(dSelect[1]);
                     if (n >= 10) curAp = apertureMap[n] || null;
                     continue;
                 }
 
-                // Coordinate command with optional G-prefix, X, Y, I, J, and required D-code
-                const coordMatch = cmd.match(/^(?:G\d+)?(?:X(-?\d+))?(?:Y(-?\d+))?(?:I(-?\d+))?(?:J(-?\d+))?D0*(\d+)$/);
+                // Coordinate command with optional G-prefix, X, Y, I, J, and D-code.
+                const coordMatch = cmd.match(/^(?:G\d+)?(?:X(-?\d+))?(?:Y(-?\d+))?(?:I(-?\d+))?(?:J(-?\d+))?(?:D0*(\d+))?$/);
                 if (coordMatch) {
+                    if (coordMatch.slice(1).every(v => v === undefined)) continue;
                     if (coordMatch[1] !== undefined) curX = toVal(coordMatch[1], xDec);
                     if (coordMatch[2] !== undefined) curY = -toVal(coordMatch[2], yDec);
-                    const dCode = parseInt(coordMatch[5]);
+                    if (coordMatch[5] !== undefined) modalD = parseInt(coordMatch[5]);
+                    const dCode = modalD;
+                    if (dCode === null) continue;
                     if (dCode >= 10) {
                         curAp = apertureMap[dCode] || null; // G54D<n> old-style aperture select
+                        modalD = null;
                     } else if (dCode === 2) {
                         if (inRegion) regionPts = [{ x: curX, y: curY }];
                     } else if (dCode === 1) {
@@ -515,8 +536,58 @@
                 }
             }
 
-            svgBounds = { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
-            return results;
+            const deduped = dedupePastePolygons(results);
+            const filtered = filterPasteOutliers(deduped);
+            const bounds = boundsForPolygons(filtered);
+            svgBounds = bounds || { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+            return filtered;
+        }
+
+        function dedupePastePolygons(polygons) {
+            const seen = new Set();
+            const round = v => Math.round(v * 10000) / 10000;
+            return polygons.filter(poly => {
+                const sig = poly.map(p => `${round(p.x)},${round(p.y)}`).join(';');
+                if (seen.has(sig)) return false;
+                seen.add(sig);
+                return true;
+            });
+        }
+
+        function boundsForPolygons(polygons) {
+            if (!polygons.length) return null;
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const poly of polygons) {
+                for (const p of poly) {
+                    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+                    maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+                }
+            }
+            if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
+            return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+        }
+
+        function filterPasteOutliers(polygons) {
+            if (polygons.length < 4) return polygons;
+            const boxes = polygons.map(poly => {
+                const xs = poly.map(p => p.x), ys = poly.map(p => p.y);
+                const w = Math.max(...xs) - Math.min(...xs);
+                const h = Math.max(...ys) - Math.min(...ys);
+                return { w, h, area: Math.max(w, 0) * Math.max(h, 0) };
+            }).filter(b => b.w > 0 && b.h > 0);
+            if (boxes.length < 4) return polygons;
+            const sortedAreas = boxes.map(b => b.area).sort((a, b) => a - b);
+            const medianArea = sortedAreas[Math.floor(sortedAreas.length / 2)] || 0;
+            if (medianArea <= 0) return polygons;
+
+            const kept = polygons.filter(poly => {
+                const xs = poly.map(p => p.x), ys = poly.map(p => p.y);
+                const w = Math.max(...xs) - Math.min(...xs);
+                const h = Math.max(...ys) - Math.min(...ys);
+                const area = Math.max(w, 0) * Math.max(h, 0);
+                return area <= medianArea * 5000;
+            });
+            return kept.length ? kept : polygons;
         }
 
         // Parse edge cuts from a Gerber file (stroke-based, not region-based).
