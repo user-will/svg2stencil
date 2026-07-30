@@ -29,151 +29,126 @@
     <meta name="twitter:image" content="https://printastencil.com/printastencil.png">
     <meta name="twitter:image:alt" content="printastencil.com — upload a KiCad paste layer and generate a 3D-printable stencil in your browser">
     <style>
+        :root { color-scheme: light; --blue:#1267e9; --blue-dark:#0754cf; --ink:#14213d; --muted:#63718a; --line:#dbe5f1; --surface:#fff; --canvas:#101a2e; --orange:#ed741c; --orange-pale:#fff3e7; --success:#178a62; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: system-ui, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            min-height: 100vh;
-            display: flex;
-        }
-        .sidebar {
-            width: 280px;
-            background: #16213e;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-            overflow-y: auto;
-            max-height: 100vh;
-        }
-        h1 { font-size: 1.4rem; color: #e94560; }
-        h2 { font-size: 0.8rem; color: #888; text-transform: uppercase; margin-bottom: 10px; }
-        .drop-zone {
-            border: 2px dashed #444;
-            border-radius: 8px;
-            padding: 20px 16px;
-            text-align: center;
-            cursor: pointer;
-        }
-        .drop-zone:hover, .drop-zone.drag-over { border-color: #e94560; background: rgba(233,69,96,0.1); }
-        .drop-zone.loaded { border-color: #4ade80; background: rgba(74,222,128,0.1); }
-        .drop-zone-text { font-size: 0.9rem; color: #888; }
-        .filename { font-size: 0.8rem; color: #4ade80; margin-top: 8px; word-break: break-all; }
-        .input-group { margin-bottom: 10px; }
-        .input-group label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 4px; }
-        .input-row { display: flex; gap: 8px; align-items: center; }
-        .toggle-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .toggle-row label { font-size: 0.8rem; color: #888; }
-        input[type="number"] {
-            flex: 1; padding: 8px; border: 1px solid #333; border-radius: 4px;
-            background: #1a1a2e; color: #eee; font-size: 0.9rem;
-        }
-        input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #e94560; }
-        input:focus { outline: none; border-color: #e94560; }
-        .unit { font-size: 0.8rem; color: #666; min-width: 30px; }
-        button {
-            width: 100%; padding: 12px; border: none; border-radius: 6px;
-            font-size: 0.9rem; font-weight: 600; cursor: pointer;
-        }
-        .btn-primary { background: #e94560; color: white; }
-        .btn-primary:hover:not(:disabled) { background: #d13652; }
-        .btn-primary:disabled { background: #444; cursor: not-allowed; }
-        .info { font-size: 0.85rem; color: #888; }
-        .info-value { color: #eee; }
-        .preview { flex: 1; position: relative; }
-        #canvas3d { width: 100%; height: 100%; display: block; }
-        .preview-hint { position: absolute; bottom: 10px; left: 10px; font-size: 0.75rem; color: #666; }
-        input[type="file"] { display: none; }
-        .hint { font-size: 0.75rem; color: #555; margin-top: 4px; }
-        #lipSection { display: none; }
-        #panelSection { display: none; }
-        #lipControls { transition: opacity 0.2s; }
-        #stencilDimensions { transition: opacity 0.2s; }
-        .size-note { font-size: 0.75rem; color: #e94560; margin-bottom: 8px; display: none; }
-        #padSection { display: none; }
-        .pad-summary { font-size: 0.8rem; color: #888; margin-bottom: 8px; }
-        .pad-actions { display: flex; gap: 8px; margin-bottom: 8px; }
-        .pad-actions button { width: auto; padding: 6px 8px; background: #293653; color: #eee; font-size: 0.75rem; }
-        .pad-actions button:hover { background: #384a70; }
-        .pad-select-mode { margin-bottom: 8px; padding: 8px; background: #293653; color: #eee; font-size: 0.8rem; }
-        .pad-select-mode.active { background: #4ade80; color: #102416; }
-        .pad-list { max-height: 220px; overflow-y: auto; border: 1px solid #293653; border-radius: 4px; }
-        .pad-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-bottom: 1px solid #293653; cursor: pointer; font-size: 0.78rem; }
-        .pad-row:last-child { border-bottom: none; }
-        .pad-row:hover { background: rgba(255,255,255,0.04); }
-        .pad-row.tiny { color: #fbbf24; }
-        .pad-row input { flex: 0 0 auto; }
-        .pad-size { margin-left: auto; color: #888; white-space: nowrap; }
-        .pad-warning { font-size: 0.72rem; color: #fbbf24; margin-top: 6px; }
-        #padSelectionBox { position: absolute; display: none; pointer-events: none; border: 1px dashed #4ade80; background: rgba(74,222,128,0.16); z-index: 1; }
+        body { font-family: Inter, ui-sans-serif, system-ui, sans-serif; background:#eef4fa; color:var(--ink); min-height:100vh; }
+        button, input { font: inherit; }
+        button { cursor:pointer; }
+        button:focus-visible, input:focus-visible, .drop-zone:focus-visible { outline:3px solid rgba(18,103,233,.32); outline-offset:2px; }
+        .app-shell { min-height:100vh; display:grid; grid-template-columns:minmax(330px, 390px) minmax(0, 1fr); grid-template-rows:auto 1fr; }
+        .topbar { grid-column:1 / -1; min-height:72px; padding:14px clamp(20px, 3vw, 44px); background:rgba(255,255,255,.94); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:18px; position:sticky; top:0; z-index:10; }
+        .brand { display:flex; align-items:center; gap:12px; font-weight:800; letter-spacing:-.04em; font-size:1.25rem; color:var(--ink); text-decoration:none; }
+        .brand-mark { display:grid; place-items:center; width:34px; height:34px; border-radius:10px; color:white; background:var(--blue); box-shadow:0 5px 12px rgba(18,103,233,.23); font-size:1rem; }
+        .brand small { display:block; color:var(--muted); font-size:.67rem; font-weight:650; letter-spacing:.02em; }
+        .topbar-note { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:.84rem; }
+        .github-link { display:grid; place-items:center; width:32px; height:32px; color:#334866; border:1px solid var(--line); border-radius:8px; background:#fff; transition:.16s ease; }
+        .github-link:hover { color:var(--blue); border-color:#9dbce6; background:#edf5ff; }
+        .github-link svg { width:18px; height:18px; fill:currentColor; }
+        .sidebar { grid-column:1; padding:22px clamp(18px, 2.4vw, 32px) 26px; overflow-y:auto; background:#f8fbff; border-right:1px solid var(--line); max-height:calc(100vh - 72px); }
+        .sidebar-inner { max-width:410px; margin:auto; display:flex; flex-direction:column; gap:14px; }
+        .section-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:0 2px 6px rgba(35,65,110,.035); }
+        h2 { font-size:.72rem; letter-spacing:.08em; color:#50617c; text-transform:uppercase; margin-bottom:11px; }
+        .section-title-row { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+        .section-optional { color:var(--muted); font-size:.72rem; font-weight:500; text-transform:none; letter-spacing:0; }
+        .drop-zone { border:2px dashed #a9bed9; border-radius:11px; padding:17px 13px; text-align:center; cursor:pointer; transition:.16s ease; background:#f9fcff; }
+        .drop-zone:hover, .drop-zone.drag-over { border-color:var(--blue); background:#edf5ff; transform:translateY(-1px); }
+        .drop-zone.loaded { border-color:#53b18e; border-style:solid; background:#effaf5; }
+        .drop-icon { display:block; font-size:1.25rem; color:var(--blue); margin-bottom:5px; line-height:1; }
+        .drop-zone-text { font-size:.88rem; font-weight:700; color:#30425f; }
+        .drop-zone-subtext { display:block; font-size:.74rem; color:var(--muted); margin-top:4px; }
+        .filename { font-size:.76rem; font-weight:650; color:var(--success); margin-top:8px; word-break:break-all; }
+        .input-group { margin-bottom:12px; }
+        .input-group:last-child { margin-bottom:0; }
+        .input-group label, .toggle-row label { display:block; font-size:.79rem; font-weight:650; color:#445570; margin-bottom:5px; }
+        .input-row { display:flex; gap:8px; align-items:center; }
+        input[type="number"] { min-width:0; flex:1; padding:9px 10px; border:1px solid #b9c9dc; border-radius:8px; background:#fff; color:var(--ink); font-size:.9rem; font-weight:600; }
+        input[type="number"]:hover { border-color:#8ca6c7; }
+        input[type="checkbox"] { width:18px; height:18px; cursor:pointer; accent-color:var(--blue); }
+        .unit { font-size:.77rem; color:var(--muted); min-width:24px; }
+        .toggle-row { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
+        .toggle-row label { margin:0; }
+        .hint { font-size:.75rem; line-height:1.45; color:var(--muted); margin-top:8px; }
+        .size-note { font-size:.74rem; color:#b84c0b; background:var(--orange-pale); border-radius:6px; padding:6px 8px; margin-bottom:8px; display:none; }
+        #lipSection, #panelSection, #padSection { display:none; }
+        #lipControls, #stencilDimensions { transition:opacity .2s; }
+        .two-col { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+        .pad-summary { font-size:.8rem; color:var(--muted); margin:9px 0 5px; }
+        .pad-select-mode { border:1px solid #c9d8ea; border-radius:8px; background:#f5f9fd; color:#29415f; font-size:.77rem; font-weight:700; }
+        .pad-select-mode:hover { background:#eaf3ff; border-color:#9dbce6; }
+        .pad-select-mode { width:100%; padding:9px 10px; }
+        .pad-select-mode.active { background:var(--orange); border-color:var(--orange); color:white; box-shadow:0 3px 10px rgba(237,116,28,.25); }
+        .pad-instruction { margin-top:8px; color:#496280; font-size:.76rem; line-height:1.4; }
+        .pad-warning { font-size:.74rem; line-height:1.4; color:#a44c0e; background:var(--orange-pale); border-radius:7px; margin-top:8px; }
+        .pad-warning:not(:empty) { padding:7px 8px; }
+        .export-card { position:sticky; bottom:12px; background:#fff; border:1px solid #cbdcf0; border-radius:13px; padding:11px; box-shadow:0 12px 26px rgba(33,63,105,.14); }
+        .btn-primary { width:100%; padding:12px; border:0; border-radius:9px; background:var(--blue); color:white; font-size:.91rem; font-weight:800; box-shadow:0 4px 10px rgba(18,103,233,.22); }
+        .btn-primary:hover:not(:disabled) { background:var(--blue-dark); }
+        .btn-primary:disabled { background:#b5c2d2; color:#f9fbfd; cursor:not-allowed; box-shadow:none; }
+        .info { padding:8px 2px 0; color:var(--muted); font-size:.76rem; text-align:center; }
+        .info-value { color:#26466e; font-weight:750; }
+        .preview { grid-column:2; position:relative; min-height:calc(100vh - 72px); padding:clamp(18px, 3vw, 38px); display:flex; flex-direction:column; gap:12px; }
+        .preview-head { display:flex; align-items:end; justify-content:space-between; gap:12px; }
+        .preview-head h1 { font-size:1.22rem; letter-spacing:-.025em; }
+        .preview-head p { color:var(--muted); font-size:.82rem; margin-top:3px; }
+        .preview-status { display:flex; align-items:center; gap:7px; color:#58708f; font-size:.75rem; font-weight:700; white-space:nowrap; }
+        .status-dot { width:8px; height:8px; border-radius:50%; background:#9fb2c9; }
+        .has-file .status-dot { background:var(--success); box-shadow:0 0 0 4px rgba(23,138,98,.12); }
+        .canvas-frame { position:relative; flex:1; min-height:460px; overflow:hidden; border:1px solid #283b59; border-radius:16px; background:var(--canvas); box-shadow:0 14px 34px rgba(32,53,87,.2); }
+        #canvas3d { width:100%; height:100%; display:block; }
+        .preview-empty { position:absolute; inset:0; display:grid; place-items:center; padding:26px; text-align:center; pointer-events:none; color:#dce9ff; background:radial-gradient(circle at 50% 43%, rgba(46,89,145,.27), transparent 43%); transition:opacity .2s, visibility .2s; }
+        .has-file .preview-empty { opacity:0; visibility:hidden; }
+        .preview-empty-icon { width:48px; height:48px; display:grid; place-items:center; border:1px solid #53729b; border-radius:14px; margin:0 auto 14px; color:#9ec8ff; font-size:1.35rem; }
+        .preview-empty h3 { font-size:1.05rem; margin-bottom:7px; }
+        .preview-empty p { max-width:300px; color:#aabbd5; font-size:.82rem; line-height:1.5; }
+        .preview-hint { position:absolute; bottom:13px; left:14px; padding:6px 9px; border-radius:6px; background:rgba(7,17,33,.64); color:#c4d4e9; font-size:.73rem; }
+        #padSelectionBox { position:absolute; display:none; pointer-events:none; border:2px dashed #ff9a4b; background:rgba(237,116,28,.18); z-index:1; }
+        input[type="file"] { display:none; }
+        @media (max-width: 960px) { .app-shell { grid-template-columns:310px minmax(0,1fr); } .sidebar { padding:18px; } .preview { padding:22px; } .canvas-frame { min-height:400px; } .topbar-note { font-size:.76rem; } }
+        @media (max-width: 720px) { .topbar-note span { display:none; } }
+        @media (max-width: 720px) { .app-shell { display:block; } .topbar { position:relative; min-height:64px; padding:12px 17px; } .brand { font-size:1.08rem; } .sidebar { max-height:none; overflow:visible; border:0; padding:16px; } .sidebar-inner { max-width:none; } .preview { min-height:0; padding:4px 16px 18px; } .preview-head { padding:8px 1px 0; } .canvas-frame { min-height:360px; } .export-card { bottom:10px; } }
+        @media (max-width: 420px) { .two-col { grid-template-columns:1fr; gap:0; } .canvas-frame { min-height:315px; } .preview-head h1 { font-size:1.05rem; } .preview-status { font-size:.69rem; } }
     </style>
 </head>
 <body>
-    <div class="sidebar">
-        <h1>SVG2Stencil</h1>
-
-        <div>
-            <h2>Paste Layer File</h2>
-            <div class="drop-zone" id="dropZone">
-                <div class="drop-zone-text">Drop SVG or Gerber file</div>
-                <div class="filename" id="filename"></div>
-            </div>
-            <input type="file" id="fileInput" accept=".svg,.gbr,.ger,.gtp,.gbp,.gm1,.gtl,.gbl">
-        </div>
-
-        <div>
-            <h2>Edge Cuts Layer <span style="color:#555;font-size:0.7rem;text-transform:none">(optional)</span></h2>
-            <div class="drop-zone" id="edgeCutsDropZone">
-                <div class="drop-zone-text">Drop Gerber or SVG edge cuts</div>
-                <div class="filename" id="edgeCutsFilename"></div>
-            </div>
-            <input type="file" id="edgeCutsFileInput" accept=".svg,.gbr,.ger,.gm1,.gm2,.gm3,.gko">
-            <div class="hint">e.g. Edge_Cuts.gbr, .gm1, .gko</div>
-        </div>
-
-        <div id="stencilSizeSection">
-            <h2>Stencil Size</h2>
-            <div id="stencilDimensions">
-                <div class="size-note" id="sizeNote">Size set by edge cuts</div>
-                <div class="input-group">
-                    <label>Width</label>
-                    <div class="input-row">
-                        <input type="number" id="stencilWidth" value="100" min="10" max="500">
-                        <span class="unit">mm</span>
-                    </div>
+    <div class="app-shell">
+        <header class="topbar">
+            <a class="brand" href="https://printastencil.com/" aria-label="printastencil.com home"><span class="brand-mark">▧</span><span>printastencil.com<small>PCB stencil workshop</small></span></a>
+            <div class="topbar-note"><span>Free, private, and open source</span><a class="github-link" href="https://github.com/user-will/svg2stencil" target="_blank" rel="noopener noreferrer" aria-label="View printastencil.com on GitHub" title="View on GitHub"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.62 2.29 6.69 5.47 7.77.4.08.55-.18.55-.39 0-.19-.01-.83-.01-1.5-2.01.38-2.53-.5-2.69-.96-.09-.24-.47-.96-.8-1.15-.27-.15-.65-.52-.01-.53.6-.01 1.03.57 1.17.81.69 1.2 1.8.86 2.24.65.07-.51.27-.86.49-1.06-1.78-.21-3.64-.92-3.64-4.07 0-.9.31-1.64.82-2.22-.08-.21-.36-1.05.08-2.19 0 0 .67-.22 2.2.85A7.38 7.38 0 0 1 8 3.95c.68 0 1.36.09 2 .27 1.53-1.07 2.2-.85 2.2-.85.44 1.14.16 1.98.08 2.19.51.58.82 1.31.82 2.22 0 3.16-1.87 3.86-3.65 4.07.28.25.53.73.53 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.47.55.39A8.2 8.2 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z"/></svg></a></div>
+        </header>
+        <aside class="sidebar" aria-label="Stencil controls">
+          <div class="sidebar-inner">
+            <section class="section-card">
+                <h2>1 · Upload paste layer</h2>
+                <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="Choose a paste layer SVG or Gerber file">
+                    <span class="drop-icon">↑</span><div class="drop-zone-text">Drop or choose your paste layer</div><span class="drop-zone-subtext">SVG, Gerber, .gtp, .gbp and more</span>
+                    <div class="filename" id="filename"></div>
                 </div>
-                <div class="input-group">
-                    <label>Height</label>
-                    <div class="input-row">
-                        <input type="number" id="stencilHeight" value="100" min="10" max="500">
-                        <span class="unit">mm</span>
-                    </div>
+                <input type="file" id="fileInput" accept=".svg,.gbr,.ger,.gtp,.gbp,.gm1,.gtl,.gbl">
+                <div class="hint">Start with your PCB paste layer. Processing stays in this browser.</div>
+            </section>
+            <section class="section-card">
+                <div class="section-title-row"><h2>2 · Board edge cuts</h2><span class="section-optional">Optional</span></div>
+                <div class="drop-zone" id="edgeCutsDropZone" tabindex="0" role="button" aria-label="Choose an optional edge cuts file">
+                    <span class="drop-icon">⌑</span><div class="drop-zone-text">Add board outline</div><span class="drop-zone-subtext">Gerber or SVG edge cuts</span>
+                    <div class="filename" id="edgeCutsFilename"></div>
                 </div>
-            </div>
-            <div class="input-group">
-                <label>Thickness</label>
-                <div class="input-row">
-                    <input type="number" id="stencilThickness" value="0.12" step="0.01" min="0.05" max="1">
-                    <span class="unit">mm</span>
-                </div>
-            </div>
-            <div class="hint">Tiny pads are included by default; resin printers are recommended for apertures below 0.1mm</div>
-        </div>
-
-        <div id="padSection">
+                <input type="file" id="edgeCutsFileInput" accept=".svg,.gbr,.ger,.gm1,.gm2,.gm3,.gko">
+                <div class="hint">Add <em>Edge_Cuts.gbr</em>, .gm1 or .gko to size the stencil to your board and enable a locating lip.</div>
+            </section>
+            <section class="section-card" id="stencilSizeSection">
+                <h2>3 · Stencil</h2>
+                <div id="stencilDimensions"><div class="size-note" id="sizeNote">Size is set by the edge cuts outline</div><div class="two-col"><div class="input-group"><label for="stencilWidth">Width</label><div class="input-row"><input type="number" id="stencilWidth" value="100" min="10" max="500"><span class="unit">mm</span></div></div><div class="input-group"><label for="stencilHeight">Height</label><div class="input-row"><input type="number" id="stencilHeight" value="100" min="10" max="500"><span class="unit">mm</span></div></div></div></div>
+                <div class="input-group"><label for="stencilThickness">Thickness</label><div class="input-row"><input type="number" id="stencilThickness" value="0.12" step="0.01" min="0.05" max="1"><span class="unit">mm</span></div></div>
+                <div class="hint">Tiny pads are included by default. Resin printers are recommended below 0.1 mm.</div>
+            </section>
+            <section class="section-card" id="padSection">
             <h2>Paste Pads</h2>
-            <button type="button" class="pad-select-mode" id="previewPadSelection">Enable pad selection</button>
+            <button type="button" class="pad-select-mode" id="previewPadSelection">Select pads in preview</button>
             <div class="pad-summary" id="padSummary"></div>
-            <div class="pad-actions">
-                <button type="button" id="selectAllPads">Select all</button>
-                <button type="button" id="selectNoPads">Select none</button>
-            </div>
-            <div class="pad-list" id="padList"></div>
+            <div class="pad-instruction">Click and drag in the preview to toggle pads.</div>
             <div class="pad-warning" id="padWarning"></div>
-        </div>
-
-        <div id="lipSection">
+            </section>
+            <section class="section-card" id="lipSection">
             <h2>Board Lip</h2>
             <div class="toggle-row">
                 <label for="lipEnabled">Enable lip</label>
@@ -181,11 +156,12 @@
             </div>
             <div id="lipControls">
                 <div class="input-group">
-                    <label>Lip Height</label>
+                    <label for="lipHeight">Lip Height</label>
                     <div class="input-row">
                         <input type="number" id="lipHeight" value="1.2" step="0.1" min="0.5" max="10">
                         <span class="unit">mm</span>
                     </div>
+                    <div class="hint">Match this to your board thickness.</div>
                 </div>
                 <div class="input-group">
                     <label>Wall Thickness</label>
@@ -195,16 +171,16 @@
                     </div>
                 </div>
                 <div class="input-group">
-                    <label>Fit Clearance</label>
+                    <label for="lipClearance">Fit Clearance</label>
                     <div class="input-row">
                         <input type="number" id="lipClearance" value="0.15" step="0.05" min="0" max="2">
                         <span class="unit">mm</span>
                     </div>
+                    <div class="hint">Tune this for your printer and material; increase it if the fit is too tight.</div>
                 </div>
             </div>
-        </div>
-
-        <div id="panelSection">
+            </section>
+            <section class="section-card" id="panelSection">
             <h2>Panelization</h2>
             <div class="input-group">
                 <label>Columns</label>
@@ -230,15 +206,14 @@
                 </div>
             </div>
             <div class="hint">Adds room only around the outside of a solid panel; boards and their lips do not move.</div>
-        </div>
-
-        <button class="btn-primary" id="downloadBtn" disabled>Download STL</button>
-        <div class="info"><span id="infoText">Load a paste layer SVG or Gerber</span></div>
-    </div>
-    <div class="preview">
-        <canvas id="canvas3d"></canvas>
-        <div id="padSelectionBox"></div>
-        <div class="preview-hint">Drag to rotate, scroll to zoom</div>
+            </section>
+            <div class="export-card"><button class="btn-primary" id="downloadBtn" disabled>Download STL</button><div class="info" aria-live="polite"><span id="infoText">Load a paste layer SVG or Gerber to begin</span></div></div>
+          </div>
+        </aside>
+        <main class="preview">
+            <div class="preview-head"><div><h1>Stencil preview</h1><p>Review the model, then export a ready-to-print STL.</p></div><div class="preview-status"><span class="status-dot"></span><span id="previewStatus" aria-live="polite">Awaiting paste layer</span></div></div>
+            <div class="canvas-frame"><canvas id="canvas3d"></canvas><div id="padSelectionBox"></div><div class="preview-empty"><div><div class="preview-empty-icon">▧</div><h3>Your stencil will appear here</h3><p>Upload a paste layer to create a printable stencil in three simple steps: upload, tune, export.</p></div></div><div class="preview-hint">Drag to rotate, scroll to zoom</div></div>
+        </main>
     </div>
 
     <script type="importmap">
@@ -266,15 +241,13 @@
         const edgeCutsFilenameEl = document.getElementById('edgeCutsFilename');
         const downloadBtn = document.getElementById('downloadBtn');
         const infoText = document.getElementById('infoText');
+        const previewStatus = document.getElementById('previewStatus');
         const widthInput = document.getElementById('stencilWidth');
         const heightInput = document.getElementById('stencilHeight');
         const thicknessInput = document.getElementById('stencilThickness');
         const padSection = document.getElementById('padSection');
         const padSummary = document.getElementById('padSummary');
-        const padList = document.getElementById('padList');
         const padWarning = document.getElementById('padWarning');
-        const selectAllPadsBtn = document.getElementById('selectAllPads');
-        const selectNoPadsBtn = document.getElementById('selectNoPads');
         const previewPadSelectionBtn = document.getElementById('previewPadSelection');
         const padSelectionBox = document.getElementById('padSelectionBox');
         const previewHint = document.querySelector('.preview-hint');
@@ -1059,31 +1032,11 @@
         }
 
         function renderPadControls() {
-            padList.replaceChildren();
             let tinyCount = 0;
-            apertures.forEach((aperture, index) => {
+            apertures.forEach(aperture => {
                 const { width, height } = apertureSize(aperture);
                 const tiny = width < 0.1 || height < 0.1;
                 if (tiny) tinyCount++;
-
-                const row = document.createElement('label');
-                row.className = `pad-row${tiny ? ' tiny' : ''}`;
-                const input = document.createElement('input');
-                input.type = 'checkbox';
-                input.checked = selectedApertures.has(index);
-                input.addEventListener('change', () => {
-                    if (input.checked) selectedApertures.add(index);
-                    else selectedApertures.delete(index);
-                    updatePadSummary();
-                    generateStencil();
-                });
-                const name = document.createElement('span');
-                name.textContent = `Pad ${index + 1}${tiny ? ' — small' : ''}`;
-                const dimensions = document.createElement('span');
-                dimensions.className = 'pad-size';
-                dimensions.textContent = `${width.toFixed(3)} × ${height.toFixed(3)} mm`;
-                row.append(input, name, dimensions);
-                padList.append(row);
             });
             padWarning.textContent = tinyCount
                 ? `${tinyCount} pad${tinyCount === 1 ? '' : 's'} below 0.1 mm may not print cleanly on an FDM printer.`
@@ -1118,10 +1071,10 @@
 
                     const { width, height } = apertureSize(aperture);
                     const included = selectedApertures.has(index);
-                    const color = !included ? 0xe94560 : (width < 0.1 || height < 0.1 ? 0xfbbf24 : 0x4ade80);
+                    const color = !included ? 0xff1744 : (width < 0.1 || height < 0.1 ? 0xffc400 : 0x00e676);
                     const mesh = new THREE.Mesh(
                         new THREE.ShapeGeometry(shape),
-                        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: included ? 0.42 : 0.3, side: THREE.DoubleSide, depthWrite: false })
+                        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: included ? 0.78 : 0.72, side: THREE.DoubleSide, depthWrite: false })
                     );
                     mesh.position.z = thickness / 2 + 0.01;
                     mesh.userData.padIndex = index;
@@ -1245,11 +1198,11 @@
         function updatePreviewPadSelectionUI() {
             const on = previewPadSelectionEnabled;
             controls.enabled = !on;
-            previewPadSelectionBtn.textContent = on ? 'Done selecting pads' : 'Enable pad selection';
+            previewPadSelectionBtn.textContent = on ? 'Done selecting pads' : 'Select pads in preview';
             previewPadSelectionBtn.classList.toggle('active', on);
             previewPadSelectionBtn.setAttribute('aria-pressed', String(on));
             previewHint.textContent = on
-                ? 'Pad selection mode: drag a box over pads to toggle them'
+                ? 'Pad selection mode: click and drag to toggle pads'
                 : 'Drag to rotate, scroll to zoom';
             if (!on) {
                 previewPointerDown = null;
@@ -1367,7 +1320,7 @@
             const geometry = mergeGeometries(stencilGeometries);
             stencilGeometries.forEach(stencilGeometry => stencilGeometry.dispose());
 
-            stencilMesh = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial({ color: 0x4a90d9, side: THREE.DoubleSide }));
+            stencilMesh = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial({ color: 0x2778e8, side: THREE.DoubleSide }));
             stencilMesh.position.z = -thickness / 2;
             scene.add(stencilMesh);
             addPadOverlays(centerX, centerY, thickness, layout.offsets);
@@ -1423,7 +1376,7 @@
                 lipGeometries.forEach(geometry => geometry.dispose());
 
                 // Lip spans Z: [-(thickness/2 + lipHeight), -thickness/2], flush with stencil bottom
-                lipMesh = new THREE.Mesh(lipGeometry, new THREE.MeshPhongMaterial({ color: 0xe94560, side: THREE.DoubleSide }));
+                lipMesh = new THREE.Mesh(lipGeometry, new THREE.MeshPhongMaterial({ color: 0xed741c, side: THREE.DoubleSide }));
                 lipMesh.position.z = -(thickness / 2 + lipHeight);
                 scene.add(lipMesh);
             }
@@ -1476,6 +1429,8 @@
                 selectedApertures = new Set(apertures.map((_, index) => index));
                 filenameEl.textContent = file.name;
                 dropZone.classList.add('loaded');
+                document.body.classList.add('has-file');
+                previewStatus.textContent = `${apertures.length} pads ready`;
                 infoText.innerHTML = `Pads: <span class="info-value">${apertures.length}</span> | Size: <span class="info-value">${svgBounds.width.toFixed(1)} x ${svgBounds.height.toFixed(1)} mm</span>`;
                 widthInput.value = Math.ceil(svgBounds.width + 20);
                 heightInput.value = Math.ceil(svgBounds.height + 20);
@@ -1493,7 +1448,7 @@
 
                 if (!contours.length) {
                     edgeCutsFilenameEl.textContent = 'No closed contours found';
-                    edgeCutsFilenameEl.style.color = '#e94560';
+                    edgeCutsFilenameEl.style.color = '#b84c0b';
                     return;
                 }
 
@@ -1508,6 +1463,7 @@
                 edgeCutsDropZone.classList.add('loaded');
                 lipSection.style.display = 'block';
                 panelSection.style.display = 'block';
+                previewStatus.textContent = 'Board outline applied';
                 updateLipUI();
 
                 if (apertures.length) generateStencil();
@@ -1517,6 +1473,7 @@
 
         // Wire up paste layer drop zone
         dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
         dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
         dropZone.addEventListener('drop', e => {
@@ -1528,6 +1485,7 @@
 
         // Wire up edge cuts drop zone
         edgeCutsDropZone.addEventListener('click', () => edgeCutsFileInput.click());
+        edgeCutsDropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); edgeCutsFileInput.click(); } });
         edgeCutsDropZone.addEventListener('dragover', e => { e.preventDefault(); edgeCutsDropZone.classList.add('drag-over'); });
         edgeCutsDropZone.addEventListener('dragleave', () => edgeCutsDropZone.classList.remove('drag-over'));
         edgeCutsDropZone.addEventListener('drop', e => {
@@ -1542,16 +1500,6 @@
         widthInput.addEventListener('change', generateStencil);
         heightInput.addEventListener('change', generateStencil);
         thicknessInput.addEventListener('change', generateStencil);
-        selectAllPadsBtn.addEventListener('click', () => {
-            selectedApertures = new Set(apertures.map((_, index) => index));
-            renderPadControls();
-            generateStencil();
-        });
-        selectNoPadsBtn.addEventListener('click', () => {
-            selectedApertures.clear();
-            renderPadControls();
-            generateStencil();
-        });
         previewPadSelectionBtn.addEventListener('click', () => {
             previewPadSelectionEnabled = !previewPadSelectionEnabled;
             updatePreviewPadSelectionUI();
