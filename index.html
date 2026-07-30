@@ -489,11 +489,13 @@
             // Newer KiCad bakes absolute values into unique per-shape macro definitions,
             // so parsing the primitives gives us the actual shape size.
             const macroShapes = {};
+            const macroDefinitions = {};
             let m;
             const amRe = /%AM([A-Za-z][A-Za-z0-9]*)\*([\s\S]*?)%/g;
             while ((m = amRe.exec(content)) !== null) {
                 const name = m[1];
                 const prims = m[2].split('*').map(s => s.trim()).filter(Boolean);
+                macroDefinitions[name] = prims;
                 let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity, ok = false;
                 for (const prim of prims) {
                     const p = prim.split(',').map(parseFloat);
@@ -582,6 +584,81 @@
                 return pts;
             }
 
+            // KiCad supplies the centers of the four rounded corners for rotated
+            // RoundRect apertures. Reconstruct the exterior from those centers so
+            // the angle encoded in the macro is retained.
+            function roundedCornersPolygon(corners, radius) {
+                const ccw = signedArea(corners) > 0;
+                const points = [];
+                for (let i = 0; i < corners.length; i++) {
+                    const prev = corners[(i - 1 + corners.length) % corners.length];
+                    const corner = corners[i];
+                    const next = corners[(i + 1) % corners.length];
+                    const inX = corner.x - prev.x, inY = corner.y - prev.y;
+                    const outX = next.x - corner.x, outY = next.y - corner.y;
+                    const inLength = Math.hypot(inX, inY), outLength = Math.hypot(outX, outY);
+                    if (!inLength || !outLength) continue;
+                    const normal = (x, y) => ccw ? { x: y, y: -x } : { x: -y, y: x };
+                    const n1 = normal(inX / inLength, inY / inLength);
+                    const n2 = normal(outX / outLength, outY / outLength);
+                    const start = Math.atan2(n1.y, n1.x);
+                    let end = Math.atan2(n2.y, n2.x);
+                    if (ccw && end < start) end += Math.PI * 2;
+                    if (!ccw && end > start) end -= Math.PI * 2;
+                    for (let step = 0; step <= 6; step++) {
+                        const a = start + (end - start) * step / 6;
+                        points.push({ x: corner.x + radius * Math.cos(a), y: corner.y + radius * Math.sin(a) });
+                    }
+                }
+                return points;
+            }
+
+            function macroValue(value, params) {
+                const expression = value.trim().replace(/\$(\d+)/g, (_, index) => String(params[parseInt(index) - 1] ?? 0));
+                // Gerber macro expressions are arithmetic only. Validate before
+                // evaluating so uploaded files cannot introduce executable code.
+                if (!/^[\d.eE+\-*/()\s]+$/.test(expression)) return NaN;
+                try { return Function(`"use strict"; return (${expression})`)(); }
+                catch { return NaN; }
+            }
+
+            function macroPolygonPoints(prims, params, cx, cy) {
+                for (const primitive of prims) {
+                    const values = primitive.split(',');
+                    if (parseInt(values[0]) !== 4 || macroValue(values[1], params) === 0) continue;
+                    const count = Math.round(macroValue(values[2], params));
+                    if (!Number.isFinite(count) || count < 3 || values.length < 3 + count * 2) continue;
+                    const points = [];
+                    for (let i = 0; i < count; i++) {
+                        const x = macroValue(values[3 + i * 2], params);
+                        const y = macroValue(values[4 + i * 2], params);
+                        if (!Number.isFinite(x) || !Number.isFinite(y)) break;
+                        points.push({ x, y });
+                    }
+                    if (points.length !== count) continue;
+                    // KiCad closes polygon macros by repeating the first vertex
+                    // before the final rotation field. Account for that optional
+                    // pair rather than reading its X coordinate as an angle.
+                    let rotationIndex = 3 + count * 2;
+                    const closingX = macroValue(values[rotationIndex], params);
+                    const closingY = macroValue(values[rotationIndex + 1], params);
+                    if (Math.abs(closingX - points[0].x) < 0.000001 && Math.abs(closingY - points[0].y) < 0.000001) {
+                        rotationIndex += 2;
+                        points.pop();
+                    }
+                    // Gerber coordinates are converted to screen-space by flipping
+                    // Y above. Apply that same transform to macro-local geometry,
+                    // which also reverses the visible rotation direction.
+                    const rotation = -macroValue(values[rotationIndex] || '0', params) * Math.PI / 180;
+                    const cos = Math.cos(rotation), sin = Math.sin(rotation);
+                    return points.map(point => {
+                        const localY = -point.y;
+                        return { x: cx + point.x * cos - localY * sin, y: cy + point.x * sin + localY * cos };
+                    });
+                }
+                return null;
+            }
+
             function aperturePoints(ap, cx, cy) {
                 const { type, params } = ap;
 
@@ -601,20 +678,28 @@
                 }
 
                 // KiCad RoundRect macro:
-                //   params[0]        = corner radius
-                //   params[1..N-1]   = corner arc CENTER coordinates as (x,y) pairs
-                //   Actual pad extent = max(|corner_x|) + radius  (same for y)
-                //   The last param is often a rotation (0) and is skipped since N is odd.
+                //   params[0]      = corner radius
+                //   params[1..8]   = the four corner-arc centers as (x,y) pairs
+                // These corner centers are already rotated for angled footprints.
+                // Do not reduce them to a width/height bounding box: that would
+                // straighten every rotated pad in the Gerber import.
                 if (/^RoundRect/i.test(type) && params.length >= 3) {
                     const r = params[0];
-                    let maxAbsX = 0, maxAbsY = 0;
-                    for (let i = 1; i + 1 < params.length; i += 2) {
-                        maxAbsX = Math.max(maxAbsX, Math.abs(params[i]));
-                        maxAbsY = Math.max(maxAbsY, Math.abs(params[i+1]));
+                    const corners = [];
+                    for (let i = 1; i + 1 < params.length && corners.length < 4; i += 2) {
+                        corners.push({ x: cx + params[i], y: cy - params[i + 1] });
                     }
-                    const hw = maxAbsX + r, hh = maxAbsY + r;
-                    if (hw > 0 && hh > 0) return roundedRectPoints(cx, cy, hw, hh, r);
+                    if (corners.length >= 3) {
+                        return r > 0 ? roundedCornersPolygon(corners, r) : corners;
+                    }
                 }
+
+                // Custom KiCad pads are commonly emitted as polygon macro
+                // primitives, optionally with the footprint angle passed as a
+                // macro parameter. Expand the polygon instead of treating that
+                // angle as a diameter in the generic fallback below.
+                const macroPolygon = macroDefinitions[type] && macroPolygonPoints(macroDefinitions[type], params, cx, cy);
+                if (macroPolygon) return macroPolygon;
 
                 // For any macro: try the bounding box computed from the %AM...% block
                 const ms = macroShapes[type];
