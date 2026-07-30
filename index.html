@@ -90,6 +90,22 @@
         #lipControls { transition: opacity 0.2s; }
         #stencilDimensions { transition: opacity 0.2s; }
         .size-note { font-size: 0.75rem; color: #e94560; margin-bottom: 8px; display: none; }
+        #padSection { display: none; }
+        .pad-summary { font-size: 0.8rem; color: #888; margin-bottom: 8px; }
+        .pad-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+        .pad-actions button { width: auto; padding: 6px 8px; background: #293653; color: #eee; font-size: 0.75rem; }
+        .pad-actions button:hover { background: #384a70; }
+        .pad-select-mode { margin-bottom: 8px; padding: 8px; background: #293653; color: #eee; font-size: 0.8rem; }
+        .pad-select-mode.active { background: #4ade80; color: #102416; }
+        .pad-list { max-height: 220px; overflow-y: auto; border: 1px solid #293653; border-radius: 4px; }
+        .pad-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-bottom: 1px solid #293653; cursor: pointer; font-size: 0.78rem; }
+        .pad-row:last-child { border-bottom: none; }
+        .pad-row:hover { background: rgba(255,255,255,0.04); }
+        .pad-row.tiny { color: #fbbf24; }
+        .pad-row input { flex: 0 0 auto; }
+        .pad-size { margin-left: auto; color: #888; white-space: nowrap; }
+        .pad-warning { font-size: 0.72rem; color: #fbbf24; margin-top: 6px; }
+        #padSelectionBox { position: absolute; display: none; pointer-events: none; border: 1px dashed #4ade80; background: rgba(74,222,128,0.16); z-index: 1; }
     </style>
 </head>
 <body>
@@ -141,11 +157,19 @@
                     <span class="unit">mm</span>
                 </div>
             </div>
-            <div class="toggle-row">
-                <label for="highDetail">High detail (resin)</label>
-                <input type="checkbox" id="highDetail">
+            <div class="hint">Tiny pads are included by default; resin printers are recommended for apertures below 0.1mm</div>
+        </div>
+
+        <div id="padSection">
+            <h2>Paste Pads</h2>
+            <button type="button" class="pad-select-mode" id="previewPadSelection">Enable pad selection</button>
+            <div class="pad-summary" id="padSummary"></div>
+            <div class="pad-actions">
+                <button type="button" id="selectAllPads">Select all</button>
+                <button type="button" id="selectNoPads">Select none</button>
             </div>
-            <div class="hint">Include apertures smaller than 0.1mm — only achievable on resin printers</div>
+            <div class="pad-list" id="padList"></div>
+            <div class="pad-warning" id="padWarning"></div>
         </div>
 
         <div id="lipSection">
@@ -184,6 +208,7 @@
     </div>
     <div class="preview">
         <canvas id="canvas3d"></canvas>
+        <div id="padSelectionBox"></div>
         <div class="preview-hint">Drag to rotate, scroll to zoom</div>
     </div>
 
@@ -197,9 +222,11 @@
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
         import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
-        let apertures = [], svgBounds = null;
+        let apertures = [], selectedApertures = new Set(), svgBounds = null;
         let edgeCutsContour = null;
-        let scene, camera, renderer, controls, stencilMesh, lipMesh;
+        let scene, camera, renderer, controls, stencilMesh, lipMesh, padOverlayGroup;
+        let previewPadSelectionEnabled = false;
+        let previewPointerDown = null;
 
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
@@ -212,7 +239,15 @@
         const widthInput = document.getElementById('stencilWidth');
         const heightInput = document.getElementById('stencilHeight');
         const thicknessInput = document.getElementById('stencilThickness');
-        const highDetailInput = document.getElementById('highDetail');
+        const padSection = document.getElementById('padSection');
+        const padSummary = document.getElementById('padSummary');
+        const padList = document.getElementById('padList');
+        const padWarning = document.getElementById('padWarning');
+        const selectAllPadsBtn = document.getElementById('selectAllPads');
+        const selectNoPadsBtn = document.getElementById('selectNoPads');
+        const previewPadSelectionBtn = document.getElementById('previewPadSelection');
+        const padSelectionBox = document.getElementById('padSelectionBox');
+        const previewHint = document.querySelector('.preview-hint');
         const lipSection = document.getElementById('lipSection');
         const lipEnabledInput = document.getElementById('lipEnabled');
         const lipHeightInput = document.getElementById('lipHeight');
@@ -238,6 +273,24 @@
             const grid = new THREE.GridHelper(200, 20, 0x444444, 0x222222);
             grid.rotation.x = Math.PI / 2;
             scene.add(grid);
+            canvas.addEventListener('pointerdown', event => {
+                if (!previewPadSelectionEnabled) return;
+                previewPointerDown = { x: event.clientX, y: event.clientY };
+                canvas.setPointerCapture(event.pointerId);
+                updatePadSelectionBox(event.clientX, event.clientY);
+            });
+            canvas.addEventListener('pointermove', event => {
+                if (!previewPointerDown) return;
+                updatePadSelectionBox(event.clientX, event.clientY);
+            });
+            canvas.addEventListener('pointerup', event => {
+                if (!previewPointerDown) return;
+                const start = previewPointerDown;
+                previewPointerDown = null;
+                padSelectionBox.style.display = 'none';
+                if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return;
+                togglePreviewPadsInBox(start, { x: event.clientX, y: event.clientY });
+            });
             animate();
             window.addEventListener('resize', () => {
                 camera.aspect = canvas.parentElement.clientWidth / canvas.parentElement.clientHeight;
@@ -257,25 +310,69 @@
             const results = [];
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
-            for (const path of doc.querySelectorAll('path')) {
-                const d = path.getAttribute('d');
-                const style = path.getAttribute('style') || '';
-                if (!d || !style.includes('fill:') || style.includes('fill:none')) continue;
-
-                const points = parsePath(d);
+            // SVG fill may be supplied through an attribute, CSS class, or inherited
+            // from a parent <g>. The old importer required an inline `fill:` style,
+            // which made perfectly valid paste pads disappear.
+            for (const element of doc.querySelectorAll('path, rect, circle, ellipse, polygon')) {
+                if (!hasSVGFill(element)) continue;
+                const points = parseSVGElement(element);
                 if (points.length < 3) continue;
 
-                let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
                 for (const p of points) {
-                    pMinX = Math.min(pMinX, p.x); pMinY = Math.min(pMinY, p.y);
-                    pMaxX = Math.max(pMaxX, p.x); pMaxY = Math.max(pMaxY, p.y);
+                    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+                    maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
                 }
                 results.push(points);
-                minX = Math.min(minX, pMinX); minY = Math.min(minY, pMinY);
-                maxX = Math.max(maxX, pMaxX); maxY = Math.max(maxY, pMaxY);
             }
-            svgBounds = { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
-            return results;
+            // KiCad can emit the same physical paste opening more than once (for
+            // example, electrically joined USB-C contacts). Overlapping holes make
+            // Three.js' shape triangulation unreliable and can cause either copy to
+            // disappear from the stencil. Gerber import already does this cleanup;
+            // SVG import needs it too.
+            const deduped = dedupePastePolygons(results);
+            svgBounds = boundsForPolygons(deduped) || { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+            return deduped;
+        }
+
+        function hasSVGFill(element) {
+            for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+                const style = node.getAttribute('style') || '';
+                const styleFill = style.match(/(?:^|;)\s*fill\s*:\s*([^;]+)/i);
+                const fill = node.getAttribute('fill') || (styleFill && styleFill[1]);
+                if (fill) return !/^(none|transparent)$/i.test(fill.trim());
+            }
+            // The SVG default fill is black, so an omitted fill attribute is still a pad.
+            return true;
+        }
+
+        function parseSVGElement(element) {
+            const tag = element.localName.toLowerCase();
+            if (tag === 'path') return parsePath(element.getAttribute('d') || '');
+            if (tag === 'polygon') {
+                const values = (element.getAttribute('points') || '').trim().split(/[\s,]+/).map(Number);
+                const points = [];
+                for (let i = 0; i + 1 < values.length; i += 2) {
+                    if (Number.isFinite(values[i]) && Number.isFinite(values[i + 1])) points.push({ x: values[i], y: values[i + 1] });
+                }
+                return points;
+            }
+            const number = name => parseFloat(element.getAttribute(name) || '0');
+            if (tag === 'rect') {
+                const x = number('x'), y = number('y'), w = number('width'), h = number('height');
+                return w > 0 && h > 0 ? [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }] : [];
+            }
+            if (tag === 'circle' || tag === 'ellipse') {
+                const cx = number('cx'), cy = number('cy');
+                const rx = tag === 'circle' ? number('r') : number('rx');
+                const ry = tag === 'circle' ? number('r') : number('ry');
+                const points = [];
+                for (let i = 0; i < 32; i++) {
+                    const a = i * Math.PI * 2 / 32;
+                    points.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+                }
+                return rx > 0 && ry > 0 ? points : [];
+            }
+            return [];
         }
 
         function parseSVGEdgeCuts(content) {
@@ -775,7 +872,143 @@
             return signedArea(pts) > 0 ? pts.slice().reverse() : pts;
         }
 
-        function generateStencil() {
+        function apertureSize(aperture) {
+            const xs = aperture.map(p => p.x);
+            const ys = aperture.map(p => p.y);
+            return { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+        }
+
+        function updatePadSummary() {
+            const selected = selectedApertures.size;
+            padSummary.textContent = `${selected} of ${apertures.length} pads included`;
+        }
+
+        function renderPadControls() {
+            padList.replaceChildren();
+            let tinyCount = 0;
+            apertures.forEach((aperture, index) => {
+                const { width, height } = apertureSize(aperture);
+                const tiny = width < 0.1 || height < 0.1;
+                if (tiny) tinyCount++;
+
+                const row = document.createElement('label');
+                row.className = `pad-row${tiny ? ' tiny' : ''}`;
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.checked = selectedApertures.has(index);
+                input.addEventListener('change', () => {
+                    if (input.checked) selectedApertures.add(index);
+                    else selectedApertures.delete(index);
+                    updatePadSummary();
+                    generateStencil();
+                });
+                const name = document.createElement('span');
+                name.textContent = `Pad ${index + 1}${tiny ? ' — small' : ''}`;
+                const dimensions = document.createElement('span');
+                dimensions.className = 'pad-size';
+                dimensions.textContent = `${width.toFixed(3)} × ${height.toFixed(3)} mm`;
+                row.append(input, name, dimensions);
+                padList.append(row);
+            });
+            padWarning.textContent = tinyCount
+                ? `${tinyCount} pad${tinyCount === 1 ? '' : 's'} below 0.1 mm may not print cleanly on an FDM printer.`
+                : '';
+            updatePadSummary();
+            padSection.style.display = 'block';
+        }
+
+        function clearPadOverlays() {
+            if (!padOverlayGroup) return;
+            for (const mesh of padOverlayGroup.children) {
+                mesh.geometry.dispose();
+                mesh.material.dispose();
+            }
+            scene.remove(padOverlayGroup);
+            padOverlayGroup = null;
+        }
+
+        function addPadOverlays(centerX, centerY, thickness) {
+            clearPadOverlays();
+            if (!previewPadSelectionEnabled) return;
+            padOverlayGroup = new THREE.Group();
+            for (let index = 0; index < apertures.length; index++) {
+                const aperture = apertures[index];
+                if (aperture.length < 3) continue;
+                const shape = new THREE.Shape();
+                const points = aperture.map(p => ({ x: p.x - centerX, y: -(p.y - centerY) }));
+                shape.moveTo(points[0].x, points[0].y);
+                for (let i = 1; i < points.length; i++) shape.lineTo(points[i].x, points[i].y);
+                shape.closePath();
+
+                const { width, height } = apertureSize(aperture);
+                const included = selectedApertures.has(index);
+                const color = !included ? 0xe94560 : (width < 0.1 || height < 0.1 ? 0xfbbf24 : 0x4ade80);
+                const mesh = new THREE.Mesh(
+                    new THREE.ShapeGeometry(shape),
+                    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: included ? 0.42 : 0.3, side: THREE.DoubleSide, depthWrite: false })
+                );
+                mesh.position.z = thickness / 2 + 0.01;
+                mesh.userData.padIndex = index;
+                mesh.userData.padCenter = new THREE.Vector3(
+                    points.reduce((sum, point) => sum + point.x, 0) / points.length,
+                    points.reduce((sum, point) => sum + point.y, 0) / points.length,
+                    0
+                );
+                padOverlayGroup.add(mesh);
+            }
+            scene.add(padOverlayGroup);
+        }
+
+        function updatePadSelectionBox(clientX, clientY) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            const left = Math.min(previewPointerDown.x, clientX) - rect.left;
+            const top = Math.min(previewPointerDown.y, clientY) - rect.top;
+            const width = Math.abs(clientX - previewPointerDown.x);
+            const height = Math.abs(clientY - previewPointerDown.y);
+            padSelectionBox.style.left = `${left}px`;
+            padSelectionBox.style.top = `${top}px`;
+            padSelectionBox.style.width = `${width}px`;
+            padSelectionBox.style.height = `${height}px`;
+            padSelectionBox.style.display = 'block';
+        }
+
+        function togglePreviewPadsInBox(start, end) {
+            if (!padOverlayGroup) return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            const minX = Math.min(start.x, end.x), maxX = Math.max(start.x, end.x);
+            const minY = Math.min(start.y, end.y), maxY = Math.max(start.y, end.y);
+            const selected = [];
+            for (const mesh of padOverlayGroup.children) {
+                const point = mesh.localToWorld(mesh.userData.padCenter.clone()).project(camera);
+                const x = rect.left + (point.x + 1) * rect.width / 2;
+                const y = rect.top + (1 - point.y) * rect.height / 2;
+                if (x >= minX && x <= maxX && y >= minY && y <= maxY) selected.push(mesh.userData.padIndex);
+            }
+            if (!selected.length) return;
+            for (const index of selected) {
+                if (selectedApertures.has(index)) selectedApertures.delete(index);
+                else selectedApertures.add(index);
+            }
+            renderPadControls();
+            generateStencil(false);
+        }
+
+        function updatePreviewPadSelectionUI() {
+            const on = previewPadSelectionEnabled;
+            controls.enabled = !on;
+            previewPadSelectionBtn.textContent = on ? 'Done selecting pads' : 'Enable pad selection';
+            previewPadSelectionBtn.classList.toggle('active', on);
+            previewPadSelectionBtn.setAttribute('aria-pressed', String(on));
+            previewHint.textContent = on
+                ? 'Pad selection mode: drag a box over pads to toggle them'
+                : 'Drag to rotate, scroll to zoom';
+            if (!on) {
+                previewPointerDown = null;
+                padSelectionBox.style.display = 'none';
+            }
+        }
+
+        function generateStencil(resetCamera = true) {
             if (!apertures.length || !svgBounds) return;
 
             const width = parseFloat(widthInput.value);
@@ -788,6 +1021,7 @@
             // Clean up old meshes
             if (stencilMesh) { scene.remove(stencilMesh); stencilMesh.geometry.dispose(); stencilMesh.material.dispose(); stencilMesh = null; }
             if (lipMesh) { scene.remove(lipMesh); lipMesh.geometry.dispose(); lipMesh.material.dispose(); lipMesh = null; }
+            clearPadOverlays();
 
             const useLip = edgeCutsContour && lipEnabledInput.checked;
 
@@ -819,12 +1053,12 @@
                 shape.closePath();
             }
 
-            // Add apertures as holes — filter sub-0.1mm apertures unless high detail is enabled
-            const minApertureSize = highDetailInput.checked ? 0 : 0.1;
-            for (const ap of apertures) {
-                const apXs = ap.map(p => p.x), apYs = ap.map(p => p.y);
-                if (Math.max(...apXs) - Math.min(...apXs) < minApertureSize) continue;
-                if (Math.max(...apYs) - Math.min(...apYs) < minApertureSize) continue;
+            // Add the user-selected apertures as holes. Tiny pads remain selectable and
+            // included by default so the user, rather than an arbitrary size cutoff,
+            // decides what is suitable for their printer.
+            for (let index = 0; index < apertures.length; index++) {
+                if (!selectedApertures.has(index)) continue;
+                const ap = apertures[index];
                 // Transform: center and flip Y (second flip corrects the Y-inversion from parsing)
                 let pts = ap.map(p => ({ x: p.x - centerX, y: -(p.y - centerY) }));
                 pts = ensureCW(pts);
@@ -849,6 +1083,7 @@
             stencilMesh = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial({ color: 0x4a90d9, side: THREE.DoubleSide }));
             stencilMesh.position.z = -thickness / 2;
             scene.add(stencilMesh);
+            addPadOverlays(centerX, centerY, thickness);
 
             // Generate lip mesh (annular wall hanging below stencil)
             if (useLip && innerEdge && outerEdge) {
@@ -879,9 +1114,11 @@
                 scene.add(lipMesh);
             }
 
-            camera.position.set(0, 0, Math.max(width, height) * 1.5);
-            controls.target.set(0, 0, 0);
-            controls.update();
+            if (resetCamera) {
+                camera.position.set(0, 0, Math.max(width, height) * 1.5);
+                controls.target.set(0, 0, 0);
+                controls.update();
+            }
 
             downloadBtn.disabled = false;
         }
@@ -920,11 +1157,13 @@
             const reader = new FileReader();
             reader.onload = (e) => {
                 apertures = isGerber(file.name) ? parseGerber(e.target.result) : parseSVG(e.target.result);
+                selectedApertures = new Set(apertures.map((_, index) => index));
                 filenameEl.textContent = file.name;
                 dropZone.classList.add('loaded');
-                infoText.innerHTML = `Apertures: <span class="info-value">${apertures.length}</span> | Size: <span class="info-value">${svgBounds.width.toFixed(1)} x ${svgBounds.height.toFixed(1)} mm</span>`;
+                infoText.innerHTML = `Pads: <span class="info-value">${apertures.length}</span> | Size: <span class="info-value">${svgBounds.width.toFixed(1)} x ${svgBounds.height.toFixed(1)} mm</span>`;
                 widthInput.value = Math.ceil(svgBounds.width + 20);
                 heightInput.value = Math.ceil(svgBounds.height + 20);
+                renderPadControls();
                 generateStencil();
             };
             reader.readAsText(file);
@@ -986,7 +1225,21 @@
         widthInput.addEventListener('change', generateStencil);
         heightInput.addEventListener('change', generateStencil);
         thicknessInput.addEventListener('change', generateStencil);
-        highDetailInput.addEventListener('change', generateStencil);
+        selectAllPadsBtn.addEventListener('click', () => {
+            selectedApertures = new Set(apertures.map((_, index) => index));
+            renderPadControls();
+            generateStencil();
+        });
+        selectNoPadsBtn.addEventListener('click', () => {
+            selectedApertures.clear();
+            renderPadControls();
+            generateStencil();
+        });
+        previewPadSelectionBtn.addEventListener('click', () => {
+            previewPadSelectionEnabled = !previewPadSelectionEnabled;
+            updatePreviewPadSelectionUI();
+            generateStencil(false);
+        });
         function updateLipUI() {
             const on = lipEnabledInput.checked;
             lipControls.style.opacity = on ? '1' : '0.4';
