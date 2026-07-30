@@ -222,7 +222,14 @@
                 <label for="solidPanelFill">Solid panel fill</label>
                 <input type="checkbox" id="solidPanelFill" checked>
             </div>
-            <div class="hint">On: continuous rectangular top and lip plate. Off: board-shaped outside edge; internal seams remain filled. Every board keeps its own fitted opening.</div>
+            <div class="input-group">
+                <label>Outer panel padding</label>
+                <div class="input-row">
+                    <input type="number" id="panelOuterPadding" value="0" min="0" max="100" step="0.5">
+                    <span class="unit">mm</span>
+                </div>
+            </div>
+            <div class="hint">Adds room only around the outside of a solid panel; boards and their lips do not move.</div>
         </div>
 
         <button class="btn-primary" id="downloadBtn" disabled>Download STL</button>
@@ -281,6 +288,7 @@
         const panelColumnsInput = document.getElementById('panelColumns');
         const panelRowsInput = document.getElementById('panelRows');
         const solidPanelFillInput = document.getElementById('solidPanelFill');
+        const panelOuterPaddingInput = document.getElementById('panelOuterPadding');
 
         function initThreeJS() {
             const canvas = document.getElementById('canvas3d');
@@ -1191,6 +1199,15 @@
                 .map(fromPath);
         }
 
+        function paddedPanelBounds(layout) {
+            if (!layout.bounds) return null;
+            const padding = Math.max(0, parseFloat(panelOuterPaddingInput.value) || 0);
+            return {
+                minX: layout.bounds.minX - padding, maxX: layout.bounds.maxX + padding,
+                minY: layout.bounds.minY - padding, maxY: layout.bounds.maxY + padding
+            };
+        }
+
         function updatePadSelectionBox(clientX, clientY) {
             const rect = renderer.domElement.getBoundingClientRect();
             const left = Math.min(previewPointerDown.x, clientX) - rect.left;
@@ -1273,6 +1290,7 @@
                 { x: width / 2, y: height / 2 }, { x: -width / 2, y: height / 2 }
             ];
             const layout = panelLayout(outerEdge || (useLip ? contourWorld : null) || fallbackOutline);
+            const outerPanelBounds = paddedPanelBounds(layout);
 
             const boardOutline = outerEdge || fallbackOutline;
             function addApertureHoles(shape, offset, clipBounds = null) {
@@ -1308,14 +1326,14 @@
             }
 
             let stencilGeometries;
-            if (layout.isPanel && solidPanelFillInput.checked && layout.bounds) {
+            if (layout.isPanel && solidPanelFillInput.checked && outerPanelBounds) {
                 // Strong panel mode: one continuous sheet spanning the complete
                 // bounding box, with every board's selected apertures cut from it.
                 const solidShape = new THREE.Shape();
-                solidShape.moveTo(layout.bounds.minX, layout.bounds.minY);
-                solidShape.lineTo(layout.bounds.maxX, layout.bounds.minY);
-                solidShape.lineTo(layout.bounds.maxX, layout.bounds.maxY);
-                solidShape.lineTo(layout.bounds.minX, layout.bounds.maxY);
+                solidShape.moveTo(outerPanelBounds.minX, outerPanelBounds.minY);
+                solidShape.lineTo(outerPanelBounds.maxX, outerPanelBounds.minY);
+                solidShape.lineTo(outerPanelBounds.maxX, outerPanelBounds.maxY);
+                solidShape.lineTo(outerPanelBounds.minX, outerPanelBounds.maxY);
                 solidShape.closePath();
                 for (const offset of layout.offsets) addApertureHoles(solidShape, offset);
                 stencilGeometries = [new THREE.ExtrudeGeometry(solidShape, { depth: thickness, bevelEnabled: false })];
@@ -1367,15 +1385,15 @@
                 };
 
                 let lipGeometries;
-                if (layout.isPanel && solidPanelFillInput.checked && layout.bounds) {
+                if (layout.isPanel && solidPanelFillInput.checked && outerPanelBounds) {
                     // Solid panel mode continues beneath the stencil as well: this
                     // makes one sturdy lip plate while leaving a fitted opening for
                     // every board in the array.
                     const solidLip = new THREE.Shape();
-                    solidLip.moveTo(layout.bounds.minX, layout.bounds.minY);
-                    solidLip.lineTo(layout.bounds.maxX, layout.bounds.minY);
-                    solidLip.lineTo(layout.bounds.maxX, layout.bounds.maxY);
-                    solidLip.lineTo(layout.bounds.minX, layout.bounds.maxY);
+                    solidLip.moveTo(outerPanelBounds.minX, outerPanelBounds.minY);
+                    solidLip.lineTo(outerPanelBounds.maxX, outerPanelBounds.minY);
+                    solidLip.lineTo(outerPanelBounds.maxX, outerPanelBounds.maxY);
+                    solidLip.lineTo(outerPanelBounds.minX, outerPanelBounds.maxY);
                     solidLip.closePath();
                     for (const offset of layout.offsets) addLipHole(solidLip, offset);
                     lipGeometries = [new THREE.ExtrudeGeometry(solidLip, { depth: lipHeight, bevelEnabled: false })];
@@ -1411,8 +1429,8 @@
             }
 
             if (resetCamera) {
-                const cameraWidth = layout.bounds ? layout.bounds.maxX - layout.bounds.minX : width;
-                const cameraHeight = layout.bounds ? layout.bounds.maxY - layout.bounds.minY : height;
+                const cameraWidth = outerPanelBounds ? outerPanelBounds.maxX - outerPanelBounds.minX : width;
+                const cameraHeight = outerPanelBounds ? outerPanelBounds.maxY - outerPanelBounds.minY : height;
                 camera.position.set(0, 0, Math.max(cameraWidth, cameraHeight) * 1.5);
                 controls.target.set(0, 0, 0);
                 controls.update();
@@ -1552,6 +1570,7 @@
         panelColumnsInput.addEventListener('change', generateStencil);
         panelRowsInput.addEventListener('change', generateStencil);
         solidPanelFillInput.addEventListener('change', generateStencil);
+        panelOuterPaddingInput.addEventListener('change', generateStencil);
 
         initThreeJS();
     </script>
