@@ -87,6 +87,7 @@
         input[type="file"] { display: none; }
         .hint { font-size: 0.75rem; color: #555; margin-top: 4px; }
         #lipSection { display: none; }
+        #panelSection { display: none; }
         #lipControls { transition: opacity 0.2s; }
         #stencilDimensions { transition: opacity 0.2s; }
         .size-note { font-size: 0.75rem; color: #e94560; margin-bottom: 8px; display: none; }
@@ -203,6 +204,27 @@
             </div>
         </div>
 
+        <div id="panelSection">
+            <h2>Panelization</h2>
+            <div class="input-group">
+                <label>Columns</label>
+                <div class="input-row">
+                    <input type="number" id="panelColumns" value="1" min="1" max="20" step="1">
+                </div>
+            </div>
+            <div class="input-group">
+                <label>Rows</label>
+                <div class="input-row">
+                    <input type="number" id="panelRows" value="1" min="1" max="20" step="1">
+                </div>
+            </div>
+            <div class="toggle-row">
+                <label for="solidPanelFill">Solid panel fill</label>
+                <input type="checkbox" id="solidPanelFill" checked>
+            </div>
+            <div class="hint">On: continuous rectangular top and lip plate. Off: board-shaped outside edge; internal seams remain filled. Every board keeps its own fitted opening.</div>
+        </div>
+
         <button class="btn-primary" id="downloadBtn" disabled>Download STL</button>
         <div class="info"><span id="infoText">Load a paste layer SVG or Gerber</span></div>
     </div>
@@ -221,6 +243,7 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
         import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+        import ClipperLib from 'https://esm.sh/clipper-lib@6.4.2';
 
         let apertures = [], selectedApertures = new Set(), svgBounds = null;
         let edgeCutsContour = null;
@@ -249,11 +272,15 @@
         const padSelectionBox = document.getElementById('padSelectionBox');
         const previewHint = document.querySelector('.preview-hint');
         const lipSection = document.getElementById('lipSection');
+        const panelSection = document.getElementById('panelSection');
         const lipEnabledInput = document.getElementById('lipEnabled');
         const lipHeightInput = document.getElementById('lipHeight');
         const lipWallInput = document.getElementById('lipWall');
         const lipClearanceInput = document.getElementById('lipClearance');
         const lipControls = document.getElementById('lipControls');
+        const panelColumnsInput = document.getElementById('panelColumns');
+        const panelRowsInput = document.getElementById('panelRows');
+        const solidPanelFillInput = document.getElementById('solidPanelFill');
 
         function initThreeJS() {
             const canvas = document.getElementById('canvas3d');
@@ -1067,36 +1094,101 @@
             padOverlayGroup = null;
         }
 
-        function addPadOverlays(centerX, centerY, thickness) {
+        function addPadOverlays(centerX, centerY, thickness, boardOffsets = [{ x: 0, y: 0 }]) {
             clearPadOverlays();
             if (!previewPadSelectionEnabled) return;
             padOverlayGroup = new THREE.Group();
-            for (let index = 0; index < apertures.length; index++) {
-                const aperture = apertures[index];
-                if (aperture.length < 3) continue;
-                const shape = new THREE.Shape();
-                const points = aperture.map(p => ({ x: p.x - centerX, y: -(p.y - centerY) }));
-                shape.moveTo(points[0].x, points[0].y);
-                for (let i = 1; i < points.length; i++) shape.lineTo(points[i].x, points[i].y);
-                shape.closePath();
+            for (const offset of boardOffsets) {
+                for (let index = 0; index < apertures.length; index++) {
+                    const aperture = apertures[index];
+                    if (aperture.length < 3) continue;
+                    const shape = new THREE.Shape();
+                    const points = aperture.map(p => ({ x: p.x - centerX + offset.x, y: -(p.y - centerY) + offset.y }));
+                    shape.moveTo(points[0].x, points[0].y);
+                    for (let i = 1; i < points.length; i++) shape.lineTo(points[i].x, points[i].y);
+                    shape.closePath();
 
-                const { width, height } = apertureSize(aperture);
-                const included = selectedApertures.has(index);
-                const color = !included ? 0xe94560 : (width < 0.1 || height < 0.1 ? 0xfbbf24 : 0x4ade80);
-                const mesh = new THREE.Mesh(
-                    new THREE.ShapeGeometry(shape),
-                    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: included ? 0.42 : 0.3, side: THREE.DoubleSide, depthWrite: false })
-                );
-                mesh.position.z = thickness / 2 + 0.01;
-                mesh.userData.padIndex = index;
-                mesh.userData.padCenter = new THREE.Vector3(
-                    points.reduce((sum, point) => sum + point.x, 0) / points.length,
-                    points.reduce((sum, point) => sum + point.y, 0) / points.length,
-                    0
-                );
-                padOverlayGroup.add(mesh);
+                    const { width, height } = apertureSize(aperture);
+                    const included = selectedApertures.has(index);
+                    const color = !included ? 0xe94560 : (width < 0.1 || height < 0.1 ? 0xfbbf24 : 0x4ade80);
+                    const mesh = new THREE.Mesh(
+                        new THREE.ShapeGeometry(shape),
+                        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: included ? 0.42 : 0.3, side: THREE.DoubleSide, depthWrite: false })
+                    );
+                    mesh.position.z = thickness / 2 + 0.01;
+                    mesh.userData.padIndex = index;
+                    mesh.userData.padCenter = new THREE.Vector3(
+                        points.reduce((sum, point) => sum + point.x, 0) / points.length,
+                        points.reduce((sum, point) => sum + point.y, 0) / points.length,
+                        0
+                    );
+                    padOverlayGroup.add(mesh);
+                }
             }
             scene.add(padOverlayGroup);
+        }
+
+        function panelLayout(boardOutline) {
+            const columns = Math.max(1, Math.round(parseFloat(panelColumnsInput.value) || 1));
+            const rows = Math.max(1, Math.round(parseFloat(panelRowsInput.value) || 1));
+            const bounds = boundsForPolygons([boardOutline]);
+            if (!bounds) return { offsets: [{ x: 0, y: 0 }], bounds: null, isPanel: false };
+            // Panels intentionally tile at a fixed 0 mm gap. The solid stencil
+            // sheet between apertures supplies the rigidity instead of spacing
+            // boards apart.
+            const pitchX = bounds.width, pitchY = bounds.height;
+            const offsets = [];
+            for (let row = 0; row < rows; row++) {
+                for (let column = 0; column < columns; column++) {
+                    offsets.push({ x: (column - (columns - 1) / 2) * pitchX, y: (row - (rows - 1) / 2) * pitchY });
+                }
+            }
+            return {
+                offsets,
+                columns,
+                rows,
+                pitchX,
+                pitchY,
+                bounds: {
+                    minX: bounds.minX - (columns - 1) * pitchX / 2,
+                    maxX: bounds.maxX + (columns - 1) * pitchX / 2,
+                    minY: bounds.minY - (rows - 1) * pitchY / 2,
+                    maxY: bounds.maxY + (rows - 1) * pitchY / 2
+                },
+                isPanel: rows > 1 || columns > 1
+            };
+        }
+
+        function internalPanelFillPolygons(boardOutline, layout) {
+            if (!layout.isPanel || !layout.bounds) return [];
+            const SCALE = 100000;
+            const toPath = polygon => polygon.map(point => ({ X: Math.round(point.x * SCALE), Y: Math.round(point.y * SCALE) }));
+            const fromPath = path => path.map(point => ({ x: point.X / SCALE, y: point.Y / SCALE }));
+            const outerTiles = layout.offsets.map(offset => toPath(boardOutline.map(point => ({ x: point.x + offset.x, y: point.y + offset.y }))));
+            const boardBounds = boundsForPolygons([boardOutline]);
+            // Work inside an inset middle window. The gaps between tiles are
+            // connected to exterior space, so using the entire panel rectangle
+            // would classify them as outside rather than fillable interior seams.
+            const inset = Math.max(0.5, Math.min(boardBounds.width, boardBounds.height) * 0.12);
+            const panelRect = toPath([
+                { x: layout.bounds.minX + inset, y: layout.bounds.minY + inset }, { x: layout.bounds.maxX - inset, y: layout.bounds.minY + inset },
+                { x: layout.bounds.maxX - inset, y: layout.bounds.maxY - inset }, { x: layout.bounds.minX + inset, y: layout.bounds.maxY - inset }
+            ]);
+            const unionClipper = new ClipperLib.Clipper();
+            unionClipper.AddPaths(outerTiles, ClipperLib.PolyType.ptSubject, true);
+            const tileUnion = new ClipperLib.Paths();
+            unionClipper.Execute(ClipperLib.ClipType.ctUnion, tileUnion, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+
+            // The inset rectangle minus tiled outlines gives the exact middle seam
+            // regions, without adding material around the outer panel boundary.
+            const voidClipper = new ClipperLib.Clipper();
+            voidClipper.AddPath(panelRect, ClipperLib.PolyType.ptSubject, true);
+            voidClipper.AddPaths(tileUnion, ClipperLib.PolyType.ptClip, true);
+            const voids = new ClipperLib.Paths();
+            voidClipper.Execute(ClipperLib.ClipType.ctDifference, voids, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+            return voids
+                .filter(path => path.length >= 3)
+                .map(fromPath);
         }
 
         function updatePadSelectionBox(clientX, clientY) {
@@ -1117,14 +1209,14 @@
             const rect = renderer.domElement.getBoundingClientRect();
             const minX = Math.min(start.x, end.x), maxX = Math.max(start.x, end.x);
             const minY = Math.min(start.y, end.y), maxY = Math.max(start.y, end.y);
-            const selected = [];
+            const selected = new Set();
             for (const mesh of padOverlayGroup.children) {
                 const point = mesh.localToWorld(mesh.userData.padCenter.clone()).project(camera);
                 const x = rect.left + (point.x + 1) * rect.width / 2;
                 const y = rect.top + (1 - point.y) * rect.height / 2;
-                if (x >= minX && x <= maxX && y >= minY && y <= maxY) selected.push(mesh.userData.padIndex);
+                if (x >= minX && x <= maxX && y >= minY && y <= maxY) selected.add(mesh.userData.padIndex);
             }
-            if (!selected.length) return;
+            if (!selected.size) return;
             for (const index of selected) {
                 if (selectedApertures.has(index)) selectedApertures.delete(index);
                 else selectedApertures.add(index);
@@ -1176,77 +1268,141 @@
                 innerEdge = offsetPolygon(contourWorld, lipClearance);
                 outerEdge = offsetPolygon(contourWorld, lipClearance + lipWall);
             }
+            const fallbackOutline = [
+                { x: -width / 2, y: -height / 2 }, { x: width / 2, y: -height / 2 },
+                { x: width / 2, y: height / 2 }, { x: -width / 2, y: height / 2 }
+            ];
+            const layout = panelLayout(outerEdge || (useLip ? contourWorld : null) || fallbackOutline);
 
-            // Create stencil shape: board outline when lip is on, rectangle otherwise
-            const shape = new THREE.Shape();
-            if (useLip && outerEdge) {
-                // Shape follows the outer edge of the lip — stencil doesn't extend beyond the board
-                const outerCCW = signedArea(outerEdge) < 0 ? outerEdge.slice().reverse() : outerEdge;
-                shape.moveTo(outerCCW[0].x, outerCCW[0].y);
-                for (let i = 1; i < outerCCW.length; i++) shape.lineTo(outerCCW[i].x, outerCCW[i].y);
-                shape.closePath();
-            } else {
-                shape.moveTo(-width/2, -height/2);
-                shape.lineTo(width/2, -height/2);
-                shape.lineTo(width/2, height/2);
-                shape.lineTo(-width/2, height/2);
-                shape.closePath();
-            }
+            const boardOutline = outerEdge || fallbackOutline;
+            function addApertureHoles(shape, offset, clipBounds = null) {
+                for (let index = 0; index < apertures.length; index++) {
+                    if (!selectedApertures.has(index)) continue;
+                    const ap = apertures[index];
+                    let pts = ap.map(p => ({ x: p.x - centerX + offset.x, y: -(p.y - centerY) + offset.y }));
+                    pts = ensureCW(pts);
 
-            // Add the user-selected apertures as holes. Tiny pads remain selectable and
-            // included by default so the user, rather than an arbitrary size cutoff,
-            // decides what is suitable for their printer.
-            for (let index = 0; index < apertures.length; index++) {
-                if (!selectedApertures.has(index)) continue;
-                const ap = apertures[index];
-                // Transform: center and flip Y (second flip corrects the Y-inversion from parsing)
-                let pts = ap.map(p => ({ x: p.x - centerX, y: -(p.y - centerY) }));
-                pts = ensureCW(pts);
-
-                if (pts.length >= 3) {
-                    const hole = new THREE.Path();
-                    hole.moveTo(pts[0].x, pts[0].y);
-                    for (let i = 1; i < pts.length; i++) {
-                        hole.lineTo(pts[i].x, pts[i].y);
+                    if (clipBounds) {
+                        const xs = pts.map(point => point.x), ys = pts.map(point => point.y);
+                        if (Math.max(...xs) < clipBounds.minX || Math.min(...xs) > clipBounds.maxX ||
+                            Math.max(...ys) < clipBounds.minY || Math.min(...ys) > clipBounds.maxY) continue;
                     }
-                    hole.closePath();
-                    shape.holes.push(hole);
+
+                    if (pts.length >= 3) {
+                        const hole = new THREE.Path();
+                        hole.moveTo(pts[0].x, pts[0].y);
+                        for (let i = 1; i < pts.length; i++) hole.lineTo(pts[i].x, pts[i].y);
+                        hole.closePath();
+                        shape.holes.push(hole);
+                    }
                 }
             }
+            function boardStencilShape(offset) {
+                const shape = new THREE.Shape();
+                const outline = signedArea(boardOutline) < 0 ? boardOutline.slice().reverse() : boardOutline;
+                shape.moveTo(outline[0].x + offset.x, outline[0].y + offset.y);
+                for (let i = 1; i < outline.length; i++) shape.lineTo(outline[i].x + offset.x, outline[i].y + offset.y);
+                shape.closePath();
+                addApertureHoles(shape, offset);
+                return shape;
+            }
 
-            // Create geometry — stencil spans Z: [-thickness/2, +thickness/2] after position offset
-            const geometry = new THREE.ExtrudeGeometry(shape, {
-                depth: thickness,
-                bevelEnabled: false
-            });
+            let stencilGeometries;
+            if (layout.isPanel && solidPanelFillInput.checked && layout.bounds) {
+                // Strong panel mode: one continuous sheet spanning the complete
+                // bounding box, with every board's selected apertures cut from it.
+                const solidShape = new THREE.Shape();
+                solidShape.moveTo(layout.bounds.minX, layout.bounds.minY);
+                solidShape.lineTo(layout.bounds.maxX, layout.bounds.minY);
+                solidShape.lineTo(layout.bounds.maxX, layout.bounds.maxY);
+                solidShape.lineTo(layout.bounds.minX, layout.bounds.maxY);
+                solidShape.closePath();
+                for (const offset of layout.offsets) addApertureHoles(solidShape, offset);
+                stencilGeometries = [new THREE.ExtrudeGeometry(solidShape, { depth: thickness, bevelEnabled: false })];
+            } else {
+                // Outline mode: real copies of the board-shaped stencil tiles.
+                stencilGeometries = layout.offsets.map(offset => new THREE.ExtrudeGeometry(boardStencilShape(offset), {
+                    depth: thickness, bevelEnabled: false
+                }));
+            }
+            if (!solidPanelFillInput.checked && layout.isPanel && layout.bounds) {
+                // Outline mode still needs a rigid, continuous middle. Use one
+                // inset fill plate rather than separate strips, so every internal
+                // seam is closed while the outer board-shaped perimeter remains.
+                const boardBounds = boundsForPolygons([boardOutline]);
+                const inset = Math.max(0.5, Math.min(boardBounds.width, boardBounds.height) * 0.12);
+                const fillBounds = {
+                    minX: layout.bounds.minX + inset, maxX: layout.bounds.maxX - inset,
+                    minY: layout.bounds.minY + inset, maxY: layout.bounds.maxY - inset
+                };
+                if (fillBounds.minX < fillBounds.maxX && fillBounds.minY < fillBounds.maxY) {
+                    const fill = new THREE.Shape();
+                    fill.moveTo(fillBounds.minX, fillBounds.minY);
+                    fill.lineTo(fillBounds.maxX, fillBounds.minY);
+                    fill.lineTo(fillBounds.maxX, fillBounds.maxY);
+                    fill.lineTo(fillBounds.minX, fillBounds.maxY);
+                    fill.closePath();
+                    for (const offset of layout.offsets) addApertureHoles(fill, offset, fillBounds);
+                    stencilGeometries.push(new THREE.ExtrudeGeometry(fill, { depth: thickness, bevelEnabled: false }));
+                }
+            }
+            const geometry = mergeGeometries(stencilGeometries);
+            stencilGeometries.forEach(stencilGeometry => stencilGeometry.dispose());
 
             stencilMesh = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial({ color: 0x4a90d9, side: THREE.DoubleSide }));
             stencilMesh.position.z = -thickness / 2;
             scene.add(stencilMesh);
-            addPadOverlays(centerX, centerY, thickness);
+            addPadOverlays(centerX, centerY, thickness, layout.offsets);
 
             // Generate lip mesh (annular wall hanging below stencil)
             if (useLip && innerEdge && outerEdge) {
                 const lipHeight = parseFloat(lipHeightInput.value);
+                const addLipHole = (shape, offset) => {
+                    const lipHole = new THREE.Path();
+                    const innerCW = ensureCW(innerEdge);
+                    lipHole.moveTo(innerCW[0].x + offset.x, innerCW[0].y + offset.y);
+                    for (let i = 1; i < innerCW.length; i++) lipHole.lineTo(innerCW[i].x + offset.x, innerCW[i].y + offset.y);
+                    lipHole.closePath();
+                    shape.holes.push(lipHole);
+                };
 
-                // Build annular shape: outer boundary with inner boundary as hole
-                const lipShape = new THREE.Shape();
-                const outerCCW = signedArea(outerEdge) < 0 ? outerEdge.slice().reverse() : outerEdge;
-                lipShape.moveTo(outerCCW[0].x, outerCCW[0].y);
-                for (let i = 1; i < outerCCW.length; i++) lipShape.lineTo(outerCCW[i].x, outerCCW[i].y);
-                lipShape.closePath();
-
-                const lipHole = new THREE.Path();
-                const innerCW = ensureCW(innerEdge);
-                lipHole.moveTo(innerCW[0].x, innerCW[0].y);
-                for (let i = 1; i < innerCW.length; i++) lipHole.lineTo(innerCW[i].x, innerCW[i].y);
-                lipHole.closePath();
-                lipShape.holes.push(lipHole);
-
-                const lipGeometry = new THREE.ExtrudeGeometry(lipShape, {
-                    depth: lipHeight,
-                    bevelEnabled: false
-                });
+                let lipGeometries;
+                if (layout.isPanel && solidPanelFillInput.checked && layout.bounds) {
+                    // Solid panel mode continues beneath the stencil as well: this
+                    // makes one sturdy lip plate while leaving a fitted opening for
+                    // every board in the array.
+                    const solidLip = new THREE.Shape();
+                    solidLip.moveTo(layout.bounds.minX, layout.bounds.minY);
+                    solidLip.lineTo(layout.bounds.maxX, layout.bounds.minY);
+                    solidLip.lineTo(layout.bounds.maxX, layout.bounds.maxY);
+                    solidLip.lineTo(layout.bounds.minX, layout.bounds.maxY);
+                    solidLip.closePath();
+                    for (const offset of layout.offsets) addLipHole(solidLip, offset);
+                    lipGeometries = [new THREE.ExtrudeGeometry(solidLip, { depth: lipHeight, bevelEnabled: false })];
+                } else {
+                    lipGeometries = layout.offsets.map(offset => {
+                    // Build one annular locating lip for every board in outline mode.
+                    const lipShape = new THREE.Shape();
+                    const outerCCW = signedArea(outerEdge) < 0 ? outerEdge.slice().reverse() : outerEdge;
+                    lipShape.moveTo(outerCCW[0].x + offset.x, outerCCW[0].y + offset.y);
+                    for (let i = 1; i < outerCCW.length; i++) lipShape.lineTo(outerCCW[i].x + offset.x, outerCCW[i].y + offset.y);
+                    lipShape.closePath();
+                    addLipHole(lipShape, offset);
+                    return new THREE.ExtrudeGeometry(lipShape, { depth: lipHeight, bevelEnabled: false });
+                    });
+                    if (layout.isPanel) {
+                        for (const fillPolygon of internalPanelFillPolygons(outerEdge, layout)) {
+                            const fillShape = new THREE.Shape();
+                            const fillCCW = signedArea(fillPolygon) < 0 ? fillPolygon.slice().reverse() : fillPolygon;
+                            fillShape.moveTo(fillCCW[0].x, fillCCW[0].y);
+                            for (let i = 1; i < fillCCW.length; i++) fillShape.lineTo(fillCCW[i].x, fillCCW[i].y);
+                            fillShape.closePath();
+                            lipGeometries.push(new THREE.ExtrudeGeometry(fillShape, { depth: lipHeight, bevelEnabled: false }));
+                        }
+                    }
+                }
+                const lipGeometry = mergeGeometries(lipGeometries);
+                lipGeometries.forEach(geometry => geometry.dispose());
 
                 // Lip spans Z: [-(thickness/2 + lipHeight), -thickness/2], flush with stencil bottom
                 lipMesh = new THREE.Mesh(lipGeometry, new THREE.MeshPhongMaterial({ color: 0xe94560, side: THREE.DoubleSide }));
@@ -1255,7 +1411,9 @@
             }
 
             if (resetCamera) {
-                camera.position.set(0, 0, Math.max(width, height) * 1.5);
+                const cameraWidth = layout.bounds ? layout.bounds.maxX - layout.bounds.minX : width;
+                const cameraHeight = layout.bounds ? layout.bounds.maxY - layout.bounds.minY : height;
+                camera.position.set(0, 0, Math.max(cameraWidth, cameraHeight) * 1.5);
                 controls.target.set(0, 0, 0);
                 controls.update();
             }
@@ -1331,6 +1489,7 @@
                 edgeCutsFilenameEl.style.color = '';
                 edgeCutsDropZone.classList.add('loaded');
                 lipSection.style.display = 'block';
+                panelSection.style.display = 'block';
                 updateLipUI();
 
                 if (apertures.length) generateStencil();
@@ -1390,6 +1549,9 @@
         lipHeightInput.addEventListener('change', generateStencil);
         lipWallInput.addEventListener('change', generateStencil);
         lipClearanceInput.addEventListener('change', generateStencil);
+        panelColumnsInput.addEventListener('change', generateStencil);
+        panelRowsInput.addEventListener('change', generateStencil);
+        solidPanelFillInput.addEventListener('change', generateStencil);
 
         initThreeJS();
     </script>
