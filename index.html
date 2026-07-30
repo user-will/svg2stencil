@@ -377,22 +377,24 @@
 
         function parseSVGEdgeCuts(content) {
             const doc = new DOMParser().parseFromString(content, 'image/svg+xml');
-            const contours = [];
+            const segments = [];
             for (const path of doc.querySelectorAll('path')) {
                 const d = path.getAttribute('d');
                 if (!d) continue;
-                const style = path.getAttribute('style') || '';
-                // Accept stroke paths (fill:none) — typical for edge cuts
-                if (style.includes('fill:') && !style.includes('fill:none')) continue;
                 const pts = parsePath(d);
-                if (pts.length >= 3) contours.push(pts);
+                // KiCad SVG edge cuts are normally one path per line or arc. Join
+                // those pieces below instead of requiring every individual path to
+                // already be a closed contour.
+                for (let i = 1; i < pts.length; i++) {
+                    segments.push({ x1: pts[i - 1].x, y1: pts[i - 1].y, x2: pts[i].x, y2: pts[i].y });
+                }
             }
-            return contours;
+            return chainSegmentsToContours(segments);
         }
 
         function parsePath(d) {
             const points = [];
-            const regex = /([MmLlHhVvCcZz])\s*([^MmLlHhVvCcZz]*)/g;
+            const regex = /([MmLlHhVvCcSsQqTtAaZz])\s*([^MmLlHhVvCcSsQqTtAaZz]*)/g;
             let x = 0, y = 0, startX = 0, startY = 0, match;
 
             while ((match = regex.exec(d)) !== null) {
@@ -409,6 +411,26 @@
                     case 'v': y += args[0]; points.push({x, y}); break;
                     case 'C': for (let i = 0; i < args.length; i += 6) { x = args[i+4]; y = args[i+5]; points.push({x, y}); } break;
                     case 'c': for (let i = 0; i < args.length; i += 6) { x += args[i+4]; y += args[i+5]; points.push({x, y}); } break;
+                    case 'S': for (let i = 0; i < args.length; i += 4) { x = args[i+2]; y = args[i+3]; points.push({x, y}); } break;
+                    case 's': for (let i = 0; i < args.length; i += 4) { x += args[i+2]; y += args[i+3]; points.push({x, y}); } break;
+                    case 'Q': for (let i = 0; i < args.length; i += 4) { x = args[i+2]; y = args[i+3]; points.push({x, y}); } break;
+                    case 'q': for (let i = 0; i < args.length; i += 4) { x += args[i+2]; y += args[i+3]; points.push({x, y}); } break;
+                    case 'T': for (let i = 0; i < args.length; i += 2) { x = args[i]; y = args[i+1]; points.push({x, y}); } break;
+                    case 't': for (let i = 0; i < args.length; i += 2) { x += args[i]; y += args[i+1]; points.push({x, y}); } break;
+                    case 'A': for (let i = 0; i < args.length; i += 7) {
+                        const endX = args[i+5], endY = args[i+6];
+                        points.push(...svgArcPoints(x, y, args[i], args[i+1], args[i+2], args[i+3], args[i+4], endX, endY));
+                        x = endX; y = endY;
+                    } break;
+                    case 'a': for (let i = 0; i < args.length; i += 7) {
+                        const endX = x + args[i+5], endY = y + args[i+6];
+                        points.push(...svgArcPoints(x, y, args[i], args[i+1], args[i+2], args[i+3], args[i+4], endX, endY));
+                        x = endX; y = endY;
+                    } break;
+                    case 'Z': case 'z':
+                        if (x !== startX || y !== startY) points.push({ x: startX, y: startY });
+                        x = startX; y = startY;
+                        break;
                 }
             }
             // Remove duplicates
@@ -419,6 +441,39 @@
                 }
             }
             return clean;
+        }
+
+        // Convert an SVG elliptical arc command to a short polyline. This follows
+        // SVG's endpoint-parameterized arc definition and preserves KiCad's rounded
+        // board corners when edge-cut paths are stitched together.
+        function svgArcPoints(x1, y1, rx, ry, rotation, largeArc, sweep, x2, y2) {
+            rx = Math.abs(rx); ry = Math.abs(ry);
+            if (!rx || !ry || (x1 === x2 && y1 === y2)) return [{ x: x2, y: y2 }];
+            const phi = rotation * Math.PI / 180;
+            const cos = Math.cos(phi), sin = Math.sin(phi);
+            const dx = (x1 - x2) / 2, dy = (y1 - y2) / 2;
+            const x1p = cos * dx + sin * dy, y1p = -sin * dx + cos * dy;
+            const scale = Math.max(1, Math.sqrt(x1p ** 2 / rx ** 2 + y1p ** 2 / ry ** 2));
+            rx *= scale; ry *= scale;
+            const numerator = rx ** 2 * ry ** 2 - rx ** 2 * y1p ** 2 - ry ** 2 * x1p ** 2;
+            const denominator = rx ** 2 * y1p ** 2 + ry ** 2 * x1p ** 2;
+            const sign = Number(largeArc) === Number(sweep) ? -1 : 1;
+            const factor = sign * Math.sqrt(Math.max(0, numerator / denominator));
+            const cxp = factor * rx * y1p / ry, cyp = factor * -ry * x1p / rx;
+            const cx = cos * cxp - sin * cyp + (x1 + x2) / 2;
+            const cy = sin * cxp + cos * cyp + (y1 + y2) / 2;
+            const angle = (ux, uy, vx, vy) => Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+            const start = angle(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry);
+            let delta = angle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
+            if (!sweep && delta > 0) delta -= Math.PI * 2;
+            if (sweep && delta < 0) delta += Math.PI * 2;
+            const count = Math.max(4, Math.ceil(Math.abs(delta) * Math.max(rx, ry) * 4));
+            const points = [];
+            for (let i = 1; i <= count; i++) {
+                const a = start + delta * i / count;
+                points.push({ x: cx + rx * Math.cos(a) * cos - ry * Math.sin(a) * sin, y: cy + rx * Math.cos(a) * sin + ry * Math.sin(a) * cos });
+            }
+            return points;
         }
 
         function parseGerber(content) {
